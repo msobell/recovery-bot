@@ -1,0 +1,36 @@
+# User config (contains credentials)
+config.toml
+
+# Strava OAuth token
+.strava_token.json
+~/.recovery-bot/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# DB (stored in ~/.recovery-bot/ but guard against local copies)
+*.db
+*.db-shm
+*.db-wal
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.envrc
+SPEC.md
+.claude/settings.local.json

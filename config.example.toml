@@ -1,0 +1,50 @@
+[user]
+name = "Your Name"
+timezone = "America/New_York"
+
+[garmin]
+# Run `recovery auth garmin` to authenticate
+# Tokens stored in ~/.recovery-bot/garmin_tokens/
+email = ""
+
+[strava]
+client_id = ""
+client_secret = ""
+# Run `recovery auth strava` to authenticate (opens browser)
+# Token stored in ~/.recovery-bot/strava_token.json
+
+[sync]
+sync_time = "08:00"
+backfill_days = 730
+
+[equipment]
+sauna = false
+squat_rack = false
+bench_press = false
+dumbbells = false
+kettlebells = false
+bands = false
+pullup_bar = false
+barbell = false
+cable_machine = false
+leg_press = false
+treadmill = false
+stationary_bike = false
+rowing_machine = false
+pool = false
+
+[equipment.dumbbell_max_kg]
+# Set to your heaviest available dumbbell weight in kg
+value = 0
+
+[recovery]
+hrv_low_pct = 0.85
+hrv_high_pct = 1.10
+rhr_high_offset = 5
+sleep_min_hours = 7.0
+overnight_stress_low = 25
+overnight_stress_high = 45
+
+[ui]
+port = 8080
+default_trend_days = 30

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.recoverybot.sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>PYTHON_PATH</string>
+        <string>-m</string>
+        <string>recovery</string>
+        <string>sync</string>
+    </array>
+
+    <!-- Run at 08:00 every morning -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Run immediately if the last scheduled time was missed (e.g. laptop was closed) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/recoverybot-sync.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/recoverybot-sync-error.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>WORKING_DIR</string>
+</dict>
+</plist>
