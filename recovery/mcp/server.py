@@ -32,9 +32,7 @@ def get_today_status() -> dict:
 
     session = _session()
     try:
-        today = date.today()
-        # Garmin overnight data = yesterday's sleep window
-        day = today - timedelta(days=1)
+        day = date.today()
         snapshot = get_snapshot(session, day)
         assessment = assess(snapshot)
         cfg = cfg_mod.get()

@@ -76,7 +76,7 @@ def get_snapshot(session: Session, day: date) -> DailySnapshot | None:
 
 
 def get_trend(session: Session, days: int = 14) -> list[DailySnapshot]:
-    end = date.today() - timedelta(days=1)
+    end = date.today()
     start = end - timedelta(days=days - 1)
     rows = session.execute(
         select(GarminDaily)

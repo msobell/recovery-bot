@@ -21,7 +21,7 @@ def _session():
 def today_status():
     session = _session()
     try:
-        day = date.today() - timedelta(days=1)
+        day = date.today()
         snapshot = get_snapshot(session, day)
         assessment = assess(snapshot)
         metrics = {}
