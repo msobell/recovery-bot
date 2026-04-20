@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Activity — Recovery Bot</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --excellent: #22c55e;
+      --good: #84cc16;
+      --moderate: #f59e0b;
+      --poor: #ef4444;
+      --accent: #6366f1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; }
+    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 16px; }
+    header a { color: var(--muted); text-decoration: none; font-size: 0.9rem; }
+    header a:hover { color: var(--text); }
+    header .sep { color: var(--border); }
+    main { padding: 28px 32px; max-width: 900px; margin: 0 auto; }
+
+    .activity-header { margin-bottom: 28px; }
+    .activity-header .sport-pill { display: inline-block; padding: 3px 10px; border-radius: 4px; background: rgba(99,102,241,0.15); color: var(--accent); font-size: 0.78rem; margin-bottom: 8px; }
+    .activity-header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 4px; }
+    .activity-header .meta { color: var(--muted); font-size: 0.88rem; }
+    .activity-header .strava-link { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+    .activity-header .strava-link:hover { text-decoration: underline; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .stat-card .label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+    .stat-card .value { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+    .stat-card .unit { font-size: 0.8rem; color: var(--muted); margin-top: 3px; }
+
+    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    .section h2 { font-size: 0.78rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 16px; }
+    .recovery-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+    .recovery-item .r-label { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .recovery-item .r-value { font-size: 1.15rem; font-weight: 600; }
+    .recovery-item .r-sub { font-size: 0.75rem; color: var(--muted); }
+
+    #loading { color: var(--muted); padding: 40px 0; font-size: 0.9rem; }
+    #error { color: var(--poor); padding: 40px 0; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+<header>
+  <a href="/">← Dashboard</a>
+  <span class="sep">|</span>
+  <span style="color:var(--muted);font-size:0.9rem">{{ user_name }}</span>
+</header>
+<main>
+  <div id="loading">Loading activity…</div>
+  <div id="error" style="display:none"></div>
+  <div id="content" style="display:none"></div>
+</main>
+
+<script>
+const STRAVA_ID = {{ strava_id }};
+
+function fmtDuration(sec) {
+  if (!sec) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function fmtPace(secPerKm) {
+  if (!secPerKm) return '—';
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function fmtDate(ds) {
+  return new Date(ds + 'T00:00:00').toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  });
+}
+
+async function load() {
+  try {
+    const a = await fetch(`/api/activity/${STRAVA_ID}`).then(r => {
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
+    });
+
+    document.title = `${a.name || a.sport_type} — Recovery Bot`;
+
+    const isRunOrHike = ['Run', 'Hike', 'Walk', 'TrailRun'].includes(a.sport_type);
+    const isRide = a.sport_type?.includes('Ride');
+    const hasDistance = a.distance_km > 0;
+    const hasPace = a.pace_per_km_sec && hasDistance;
+
+    const stats = [
+      hasDistance && { label: 'Distance', value: a.distance_km?.toFixed(1) ?? '—', unit: 'km' },
+      { label: 'Duration', value: fmtDuration(a.duration_sec), unit: '' },
+      a.elevation_m && { label: 'Elevation', value: a.elevation_m, unit: 'm gain' },
+      a.avg_hr && { label: 'Avg Heart Rate', value: a.avg_hr, unit: 'bpm' },
+      a.max_hr && { label: 'Max Heart Rate', value: a.max_hr, unit: 'bpm' },
+      hasPace && { label: isRide ? 'Avg Speed' : 'Avg Pace', value: fmtPace(a.pace_per_km_sec), unit: isRide ? 'km/h' : '/km' },
+      a.avg_power && { label: 'Avg Power', value: a.avg_power, unit: 'W' },
+      a.suffer_score && { label: 'Suffer Score', value: a.suffer_score, unit: '' },
+      a.perceived_exertion && { label: 'Effort', value: `${a.perceived_exertion}/10`, unit: '' },
+    ].filter(Boolean);
+
+    const statsHTML = stats.map(s => `
+      <div class="stat-card">
+        <div class="label">${s.label}</div>
+        <div class="value">${s.value}</div>
+        ${s.unit ? `<div class="unit">${s.unit}</div>` : ''}
+      </div>`).join('');
+
+    const rc = a.recovery_context;
+    const recoveryItems = [
+      rc.hrv_rmssd && { label: 'HRV RMSSD', value: `${Math.round(rc.hrv_rmssd)}ms`, sub: rc.hrv_status || '' },
+      rc.resting_hr && { label: 'Resting HR', value: `${rc.resting_hr} bpm`, sub: '' },
+      rc.sleep_score && { label: 'Sleep Score', value: rc.sleep_score, sub: rc.sleep_duration_hours ? `${rc.sleep_duration_hours}h` : '' },
+      rc.body_battery && { label: 'Body Battery', value: rc.body_battery, sub: 'at wake' },
+      rc.overnight_stress && { label: 'Overnight Stress', value: Math.round(rc.overnight_stress), sub: '' },
+    ].filter(Boolean);
+
+    const recoveryHTML = recoveryItems.length
+      ? `<div class="section">
+           <h2>Recovery on this day</h2>
+           <div class="recovery-grid">
+             ${recoveryItems.map(r => `
+               <div class="recovery-item">
+                 <div class="r-label">${r.label}</div>
+                 <div class="r-value">${r.value}</div>
+                 ${r.sub ? `<div class="r-sub">${r.sub}</div>` : ''}
+               </div>`).join('')}
+           </div>
+         </div>`
+      : '';
+
+    document.getElementById('content').innerHTML = `
+      <div class="activity-header">
+        <div class="sport-pill">${a.sport_type || 'Activity'}</div>
+        <h1>${a.name || a.sport_type}</h1>
+        <div class="meta">${fmtDate(a.date)}</div>
+        <a class="strava-link" href="https://www.strava.com/activities/${a.id}" target="_blank" rel="noopener">
+          View on Strava ↗
+        </a>
+      </div>
+      <div class="stats-grid">${statsHTML}</div>
+      ${recoveryHTML}
+    `;
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('content').style.display = 'block';
+  } catch (e) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('error').textContent = `Failed to load activity: ${e}`;
+    document.getElementById('error').style.display = 'block';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

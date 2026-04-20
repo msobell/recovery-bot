@@ -1,6 +1,6 @@
 from datetime import date, datetime
-from sqlalchemy import Date, DateTime, Float, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from recovery.db.session import Base
 
 
@@ -54,6 +54,39 @@ class StravaActivity(Base):
     suffer_score: Mapped[int | None] = mapped_column(Integer)
     perceived_exertion: Mapped[int | None] = mapped_column(Integer)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class GarminActivity(Base):
+    __tablename__ = "garmin_activities"
+
+    garmin_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    name: Mapped[str | None] = mapped_column(Text)
+    sport_type: Mapped[str | None] = mapped_column(String(64))
+    duration_sec: Mapped[int | None] = mapped_column(Integer)
+    avg_hr: Mapped[float | None] = mapped_column(Float)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    sets: Mapped[list["GarminStrengthSet"]] = relationship(
+        "GarminStrengthSet", back_populates="activity", cascade="all, delete-orphan"
+    )
+
+
+class GarminStrengthSet(Base):
+    __tablename__ = "garmin_strength_sets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    garmin_activity_id: Mapped[int] = mapped_column(Integer, ForeignKey("garmin_activities.garmin_id"), index=True)
+    set_index: Mapped[int] = mapped_column(Integer)
+    exercise_category: Mapped[str | None] = mapped_column(String(64))
+    # user-overridden category; if set, UI shows this instead of exercise_category
+    exercise_category_override: Mapped[str | None] = mapped_column(String(64))
+    reps: Mapped[int | None] = mapped_column(Integer)
+    weight_g: Mapped[float | None] = mapped_column(Float)
+    duration_sec: Mapped[float | None] = mapped_column(Float)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+    activity: Mapped["GarminActivity"] = relationship("GarminActivity", back_populates="sets")
 
 
 class SyncLog(Base):

@@ -9,7 +9,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from sqlalchemy.orm import Session
 
 from recovery import config as cfg_mod
-from recovery.db.models import GarminDaily, StravaActivity, SyncLog
+from recovery.db.models import GarminActivity, GarminDaily, GarminStrengthSet, StravaActivity, SyncLog
 from recovery.db.session import get_session, init_db
 from recovery.ingest import garmin, strava
 
@@ -27,6 +27,50 @@ def _upsert_garmin(session: Session, data: dict) -> bool:
         existing.synced_at = datetime.now()
     else:
         session.add(GarminDaily(**data, synced_at=datetime.now()))
+    return True
+
+
+def _upsert_strength(session: Session, activity: dict) -> bool:
+    """Upsert a Garmin strength activity and replace its sets."""
+    garmin_id = activity.get("garmin_id")
+    if not garmin_id:
+        return False
+
+    existing = session.get(GarminActivity, garmin_id)
+    if existing:
+        existing.name = activity.get("name") or existing.name
+        existing.sport_type = activity.get("sport_type") or existing.sport_type
+        existing.duration_sec = activity.get("duration_sec") or existing.duration_sec
+        existing.avg_hr = activity.get("avg_hr") or existing.avg_hr
+        existing.synced_at = datetime.now()
+        # Drop and re-insert sets so set_index stays canonical
+        for s in list(existing.sets):
+            session.delete(s)
+        session.flush()
+        act = existing
+    else:
+        act = GarminActivity(
+            garmin_id=garmin_id,
+            date=activity["date"],
+            name=activity.get("name"),
+            sport_type=activity.get("sport_type"),
+            duration_sec=activity.get("duration_sec"),
+            avg_hr=activity.get("avg_hr"),
+            synced_at=datetime.now(),
+        )
+        session.add(act)
+        session.flush()
+
+    for s in activity.get("sets", []):
+        session.add(GarminStrengthSet(
+            garmin_activity_id=garmin_id,
+            set_index=s["set_index"],
+            exercise_category=s.get("exercise_category"),
+            reps=s.get("reps"),
+            weight_g=s.get("weight_g"),
+            duration_sec=s.get("duration_sec"),
+            start_time=datetime.fromisoformat(s["start_time"]) if s.get("start_time") else None,
+        ))
     return True
 
 
@@ -89,6 +133,23 @@ def daily_sync() -> None:
         _log_sync(session, "garmin", yesterday, yesterday, 0, str(e))
         console.print(f"  [red]Garmin sync failed: {e}[/red]")
 
+    # Garmin strength
+    try:
+        console.print(f"  Fetching Garmin strength activities for {yesterday}...")
+        garmin_api = garmin.load_session()
+        strength_acts = garmin.fetch_strength_activities(garmin_api, yesterday)
+        rows = 0
+        for act in strength_acts:
+            if _upsert_strength(session, act):
+                rows += 1
+        session.commit()
+        _log_sync(session, "garmin_strength", yesterday, yesterday, rows)
+        console.print(f"  [green]Garmin strength sync complete. {rows} activities written.[/green]")
+    except Exception as e:
+        session.rollback()
+        _log_sync(session, "garmin_strength", yesterday, yesterday, 0, str(e))
+        console.print(f"  [red]Garmin strength sync failed: {e}[/red]")
+
     # Strava
     try:
         last = _last_strava_date(session)
@@ -133,6 +194,7 @@ def backfill(days: int | None = None) -> None:
 
     garmin_rows = 0
     garmin_errors = 0
+    garmin_api = garmin.load_session()
 
     with Progress(
         SpinnerColumn(),
@@ -145,14 +207,24 @@ def backfill(days: int | None = None) -> None:
         current = garmin_start
         while current <= end_date:
             try:
-                data = garmin.fetch_day(current, delay=1.1)
+                data = garmin.fetch_day(current, api=garmin_api, delay=1.1)
                 _upsert_garmin(session, data)
                 session.commit()
                 garmin_rows += 1
             except Exception as e:
                 session.rollback()
-                console.print(f"  [yellow]Warning: {current} failed: {e}[/yellow]")
+                console.print(f"  [yellow]Warning: {current} Garmin daily failed: {e}[/yellow]")
                 garmin_errors += 1
+
+            try:
+                strength_acts = garmin.fetch_strength_activities(garmin_api, current)
+                for act in strength_acts:
+                    _upsert_strength(session, act)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                console.print(f"  [yellow]Warning: {current} strength sync failed: {e}[/yellow]")
+
             progress.advance(task)
             current = current + timedelta(days=1)
 

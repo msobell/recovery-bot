@@ -121,18 +121,18 @@ def sync():
 @click.option("--port", default=None, type=int)
 def serve(host, port):
     """Start the web dashboard."""
+    import socket
     import uvicorn
     from recovery import config as cfg_mod
     from recovery.db.session import init_db
 
     cfg = cfg_mod.get()
+    p = port or cfg.ui.port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("127.0.0.1", p)) == 0:
+            raise click.ClickException(f"Port {p} is already in use. Is recovery-bot already running?")
     init_db()
-    uvicorn.run(
-        "recovery.api.app:app",
-        host=host,
-        port=port or cfg.ui.port,
-        reload=False,
-    )
+    uvicorn.run("recovery.api.app:app", host=host, port=p, reload=False)
 
 
 @cli.command("mcp")

@@ -18,3 +18,13 @@ def index(request: Request):
         name="index.html",
         context={"user_name": cfg.user.name, "default_trend_days": cfg.ui.default_trend_days},
     )
+
+
+@router.get("/activity/{strava_id}", response_class=HTMLResponse)
+def activity_page(request: Request, strava_id: int):
+    cfg = cfg_mod.get()
+    return templates.TemplateResponse(
+        request=request,
+        name="activity.html",
+        context={"user_name": cfg.user.name, "strava_id": strava_id},
+    )

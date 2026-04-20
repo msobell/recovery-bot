@@ -261,6 +261,141 @@ def query_date_range(metric: str, start_date: str, end_date: str) -> dict:
         session.close()
 
 
+_G_TO_LBS = 0.00220462
+
+
+@mcp.tool()
+def get_strength_sessions(days: int = 7) -> dict:
+    """
+    Get strength training sessions with full exercise-level detail for the past N days (default 7).
+    Returns each session with every set: exercise category, reps, and weight in lbs.
+    Use this when the user asks about their lifting, strength work, sets, reps, or weights.
+    """
+    from sqlalchemy import select
+    from recovery.db.models import GarminActivity
+
+    session = _session()
+    try:
+        today = date.today()
+        start = today - timedelta(days=days - 1)
+
+        acts = session.execute(
+            select(GarminActivity)
+            .where(GarminActivity.date >= start, GarminActivity.date <= today)
+            .order_by(GarminActivity.date.desc(), GarminActivity.garmin_id)
+        ).scalars().all()
+
+        sessions_out = []
+        for act in acts:
+            sets_out = []
+            for s in sorted(act.sets, key=lambda x: x.set_index):
+                weight_lbs = round(s.weight_g * _G_TO_LBS) if s.weight_g else None
+                sets_out.append({
+                    "exercise": s.exercise_category_override or s.exercise_category or "UNKNOWN",
+                    "reps": s.reps,
+                    "weight_lbs": weight_lbs,
+                })
+            sessions_out.append({
+                "date": str(act.date),
+                "name": act.name or "Strength",
+                "duration_min": round(act.duration_sec / 60) if act.duration_sec else None,
+                "avg_hr": act.avg_hr,
+                "set_count": len(sets_out),
+                "sets": sets_out,
+            })
+
+        return {
+            "days": days,
+            "session_count": len(sessions_out),
+            "sessions": sessions_out,
+        }
+    finally:
+        session.close()
+
+
+@mcp.tool()
+def get_exercise_history(exercise: str, days: int = 90) -> dict:
+    """
+    Get the full history of a specific exercise over the past N days (default 90).
+    exercise: Garmin category name, e.g. 'BENCH_PRESS', 'CURL', 'ONE_ARM_KETTLEBELL_SWING'.
+              Case-insensitive. Pass 'list' to see all known exercise names.
+    Returns sets grouped by session date so you can track progression over time.
+    """
+    from sqlalchemy import select
+    from recovery.db.models import GarminActivity, GarminStrengthSet
+
+    session = _session()
+    try:
+        # Handle 'list' to aid discoverability
+        if exercise.strip().lower() == "list":
+            rows = session.execute(
+                select(GarminStrengthSet.exercise_category)
+                .where(GarminStrengthSet.exercise_category.isnot(None))
+                .distinct()
+                .order_by(GarminStrengthSet.exercise_category)
+            ).scalars().all()
+            overrides = session.execute(
+                select(GarminStrengthSet.exercise_category_override)
+                .where(GarminStrengthSet.exercise_category_override.isnot(None))
+                .distinct()
+                .order_by(GarminStrengthSet.exercise_category_override)
+            ).scalars().all()
+            return {"known_exercises": sorted(set(rows) | set(overrides))}
+
+        needle = exercise.strip().upper()
+        today = date.today()
+        start = today - timedelta(days=days - 1)
+
+        sets = session.execute(
+            select(GarminStrengthSet)
+            .join(GarminActivity, GarminStrengthSet.garmin_activity_id == GarminActivity.garmin_id)
+            .where(
+                GarminActivity.date >= start,
+                GarminActivity.date <= today,
+            )
+        ).scalars().all()
+
+        # Filter to matching sets (override takes precedence)
+        matching = [
+            s for s in sets
+            if (s.exercise_category_override or s.exercise_category or "").upper() == needle
+        ]
+
+        # Group by date
+        by_date: dict[str, list] = {}
+        for s in sorted(matching, key=lambda x: (x.start_time or date.min,)):
+            act_date = str(session.get(GarminActivity, s.garmin_activity_id).date)
+            by_date.setdefault(act_date, []).append({
+                "reps": s.reps,
+                "weight_lbs": round(s.weight_g * _G_TO_LBS) if s.weight_g else None,
+            })
+
+        history = [{"date": d, "sets": ss} for d, ss in sorted(by_date.items(), reverse=True)]
+
+        return {
+            "exercise": needle,
+            "days": days,
+            "session_count": len(history),
+            "history": history,
+        }
+    finally:
+        session.close()
+
+
+@mcp.tool()
+def log_strength_note(note: str, exercises: list[str], date_str: str = "") -> str:
+    """
+    Save a free-text note about a strength session and link it to named exercises.
+    note: what happened, e.g. 'Bench felt strong today, hit 185 lbs for 3x5'
+    exercises: list of exercise names to link in the knowledge graph, e.g. ['bench press', 'deadlift']
+    date_str: optional YYYY-MM-DD, defaults to today
+    Use this to log observations, PRs, form cues, or pain/discomfort notes.
+    """
+    day = date_str or str(date.today())
+    full_note = f"[{day}] {note}"
+    return save_memory(full_note, exercises, metadata={"type": "workout_note", "date": day})
+
+
 def _sport_breakdown(rows) -> dict:
     breakdown: dict[str, int] = {}
     for r in rows:

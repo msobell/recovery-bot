@@ -49,6 +49,30 @@
     ul.signals li { font-size: 0.8rem; padding: 4px 10px; border-radius: 4px; background: rgba(99,102,241,0.1); color: var(--accent); }
     ul.signals li.warning { background: rgba(239,68,68,0.1); color: var(--poor); }
 
+    /* Today activity columns */
+    .activity-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
+    @media (max-width: 720px) { .activity-columns { grid-template-columns: 1fr; } }
+    .activity-col { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .activity-col h3 { font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    .activity-col .empty { color: var(--muted); font-size: 0.85rem; }
+    .cardio-item { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .cardio-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+    .cardio-item .act-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 4px; }
+    .cardio-item .act-meta { font-size: 0.8rem; color: var(--muted); }
+    .strength-activity { margin-bottom: 16px; }
+    .strength-activity:last-child { margin-bottom: 0; }
+    .strength-activity .act-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; }
+    .set-row { display: grid; grid-template-columns: 2fr 80px 90px; gap: 8px; align-items: center; font-size: 0.82rem; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .set-row:last-child { border-bottom: none; }
+    .set-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 4px; font-size: 0.78rem; width: 100%; }
+    .set-field { background: transparent; border: 1px solid transparent; color: var(--text); border-radius: 4px; padding: 2px 5px; font-size: 0.82rem; width: 100%; text-align: right; transition: border-color 0.15s; }
+    .set-field:hover, .set-field:focus { border-color: var(--border); background: var(--bg); outline: none; }
+    .set-field.saving { border-color: var(--accent); }
+    .set-field.saved { border-color: var(--excellent); }
+    .day-group { margin-bottom: 16px; }
+    .day-group:last-child { margin-bottom: 0; }
+    .day-label { font-size: 0.72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+
     /* Charts */
     .chart-section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
     .chart-section h2 { font-size: 0.9rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
@@ -115,7 +139,7 @@
       <div class="chart-section">
         <table>
           <thead>
-            <tr><th>Date</th><th>Name</th><th>Type</th><th>Duration</th><th>Distance</th><th>Avg HR</th><th>Effort</th></tr>
+            <tr><th>Date</th><th>Name</th><th>Type</th><th>Duration</th><th>Distance</th><th>Avg HR</th><th>Effort</th><th></th></tr>
           </thead>
           <tbody id="activities-body"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
@@ -138,7 +162,16 @@ function showTab(name, btn) {
 // ── Today ─────────────────────────────────────────────────────────────────
 async function loadToday() {
   const el = document.getElementById('today-status');
-  const data = await fetch('/api/today').then(r => r.json());
+  let data, acts;
+  try {
+    [data, acts] = await Promise.all([
+      fetch('/api/today').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+      fetch('/api/today/activities').then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+    ]);
+  } catch (e) {
+    el.innerHTML = `<div style="color:var(--poor);padding:20px 0">Failed to load today's data: ${e}</div>`;
+    return;
+  }
 
   const statusClass = `status-${data.status}`;
   const signalHTML = [
@@ -155,6 +188,53 @@ async function loadToday() {
     { label: 'Overnight Stress', value: m.overnight_stress != null ? `${m.overnight_stress.toFixed(0)}` : '—', sub: m.overnight_stress_qualifier || '' },
     { label: 'Body Battery', value: m.body_battery_start != null ? `${m.body_battery_start}` : '—', sub: 'at wake' },
   ];
+
+  // All known categories for dropdowns (union of today + all-time)
+  const allCategories = acts.known_categories || [];
+
+  const cardioHTML = acts.cardio.length
+    ? groupByDate(acts.cardio).map(([ds, items]) => `
+        <div class="day-group">
+          <div class="day-label">${fmtDate(ds)}</div>
+          ${items.map(a => `
+            <div class="cardio-item">
+              <div class="act-name"><a href="/activity/${a.id}" style="color:var(--text);text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${a.name}</a></div>
+              <div class="act-meta">
+                ${a.duration_min != null ? `${a.duration_min} min` : ''}
+                ${a.avg_hr != null ? ` &middot; ${Math.round(a.avg_hr)} bpm avg` : ''}
+              </div>
+            </div>`).join('')}
+        </div>`).join('')
+    : '<div class="empty">No cardio in the last 7 days</div>';
+
+  const strengthHTML = acts.strength.length
+    ? groupByDate(acts.strength).map(([ds, acts2]) => `
+        <div class="day-group">
+          <div class="day-label">${fmtDate(ds)}</div>
+          ${acts2.map(act => {
+            const setsHTML = act.sets.map(s => {
+              const opts = allCategories.map(c =>
+                `<option value="${c}" ${c === s.exercise_category ? 'selected' : ''}>${fmtCat(c)}</option>`
+              ).join('');
+              return `
+                <div class="set-row">
+                  <select onchange="patchSet(${s.set_id}, {category: this.value})">${opts}</select>
+                  <input class="set-field" type="number" min="0" step="1"
+                    value="${s.reps ?? ''}" placeholder="reps"
+                    onchange="patchSet(${s.set_id}, {reps: +this.value}, this)">
+                  <input class="set-field" type="number" min="0" step="0.5"
+                    value="${s.weight_lbs ?? ''}" placeholder="lbs"
+                    onchange="patchSet(${s.set_id}, {weight_lbs: +this.value}, this)">
+                </div>`;
+            }).join('');
+            return `
+              <div class="strength-activity">
+                <div class="act-name">${act.name}${act.duration_min != null ? ` <span style="color:var(--muted);font-weight:400;font-size:0.8rem">${act.duration_min} min</span>` : ''}</div>
+                ${setsHTML || '<div class="empty">No sets recorded</div>'}
+              </div>`;
+          }).join('')}
+        </div>`).join('')
+    : '<div class="empty">No strength in the last 7 days</div>';
 
   el.innerHTML = `
     <div class="status-card">
@@ -174,7 +254,53 @@ async function loadToday() {
         </div>
       `).join('')}
     </div>
+    <div class="activity-columns">
+      <div class="activity-col">
+        <h3>Cardio</h3>
+        ${cardioHTML}
+      </div>
+      <div class="activity-col">
+        <h3>Strength</h3>
+        ${strengthHTML}
+      </div>
+    </div>
   `;
+}
+
+function fmtCat(cat) {
+  return cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function fmtDate(ds) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const d = new Date(ds + 'T00:00:00');
+  const diff = Math.round((today - d) / 86400000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+}
+
+function groupByDate(items) {
+  const map = new Map();
+  for (const item of items) {
+    if (!map.has(item.date)) map.set(item.date, []);
+    map.get(item.date).push(item);
+  }
+  return [...map.entries()];
+}
+
+async function patchSet(setId, fields, el) {
+  if (el) el.classList.add('saving');
+  await fetch(`/api/strength/set/${setId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  });
+  if (el) {
+    el.classList.remove('saving');
+    el.classList.add('saved');
+    setTimeout(() => el.classList.remove('saved'), 1200);
+  }
 }
 
 // ── Trends ────────────────────────────────────────────────────────────────
@@ -305,12 +431,13 @@ async function loadActivities() {
   tbody.innerHTML = data.activities.map(a => `
     <tr>
       <td>${a.date}</td>
-      <td>${a.name || '—'}</td>
+      <td><a href="/activity/${a.id}" style="color:var(--text);text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${a.name || '—'}</a></td>
       <td><span class="sport-pill">${a.sport_type || '—'}</span></td>
       <td>${a.duration_min != null ? `${a.duration_min}min` : '—'}</td>
       <td>${a.distance_km != null ? `${a.distance_km}km` : '—'}</td>
       <td>${a.avg_hr != null ? `${a.avg_hr}bpm` : '—'}</td>
       <td>${a.suffer_score != null ? a.suffer_score : '—'}</td>
+      <td><a href="https://www.strava.com/activities/${a.id}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.8rem;text-decoration:none" title="View on Strava">↗</a></td>
     </tr>
   `).join('');
 }

@@ -98,6 +98,83 @@ def fetch_body_battery(api: Garmin, day: date) -> dict:
         return {}
 
 
+_CARDIO_TYPES = {
+    "cycling", "running", "walking", "hiking", "swimming", "rowing",
+    "elliptical", "cardio", "yoga", "pilates", "other",
+}
+
+_STRENGTH_TYPES = {"strength_training", "weight_training"}
+
+
+def fetch_strength_activities(api: Garmin, day: date) -> list[dict]:
+    """Return strength activities for the day with their exercise sets.
+
+    Each item in the returned list is an activity dict with a 'sets' key
+    containing only ACTIVE (non-rest) sets.
+    """
+    ds = day.strftime("%Y-%m-%d")
+    try:
+        all_acts = api.get_activities_by_date(ds, ds) or []
+    except Exception:
+        return []
+
+    activities = [
+        a for a in all_acts
+        if a.get("activityType", {}).get("typeKey") in _STRENGTH_TYPES
+    ]
+
+    results = []
+    for act in activities:
+        garmin_id = act.get("activityId")
+        if not garmin_id:
+            continue
+
+        try:
+            sets_data = api.get_activity_exercise_sets(garmin_id) or {}
+        except Exception:
+            sets_data = {}
+
+        raw_sets = sets_data.get("exerciseSets", [])
+        active_sets = []
+        for i, s in enumerate(raw_sets):
+            if s.get("setType") != "ACTIVE":
+                continue
+            exercises = s.get("exercises") or []
+            # Pick the exercise with highest probability that isn't UNKNOWN
+            category = None
+            best_prob = -1.0
+            for ex in exercises:
+                cat = ex.get("category", "UNKNOWN")
+                prob = ex.get("probability", 0.0)
+                if cat != "UNKNOWN" and prob > best_prob:
+                    best_prob = prob
+                    category = cat
+            if category is None:
+                category = "UNKNOWN"
+
+            active_sets.append({
+                "set_index": i,
+                "exercise_category": category,
+                "reps": s.get("repetitionCount"),
+                "weight_g": s.get("weight"),
+                "duration_sec": s.get("duration"),
+                "start_time": s.get("startTime"),
+            })
+
+        sport_key = act.get("activityType", {}).get("typeKey", "strength_training")
+        results.append({
+            "garmin_id": garmin_id,
+            "date": day,
+            "name": act.get("activityName"),
+            "sport_type": sport_key,
+            "duration_sec": int(act.get("duration", 0) or 0),
+            "avg_hr": act.get("averageHR"),
+            "sets": active_sets,
+        })
+
+    return results
+
+
 def fetch_day(day: date, api: Garmin | None = None, delay: float = 0.0) -> dict:
     """Fetch all metrics for a single day, returning a merged dict."""
     if delay:
