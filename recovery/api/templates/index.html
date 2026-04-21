@@ -100,6 +100,7 @@
     <nav>
       <button class="active" onclick="showTab('today', this)">Today</button>
       <button onclick="showTab('trends', this)">Trends</button>
+      <button onclick="showTab('sleep', this)">Sleep</button>
       <button onclick="showTab('activities', this)">Activities</button>
     </nav>
   </header>
@@ -124,6 +125,28 @@
       <div class="chart-section"><h2>Sleep</h2><canvas id="chart-sleep"></canvas></div>
       <div class="chart-section"><h2>Resting Heart Rate</h2><canvas id="chart-rhr"></canvas></div>
       <div class="chart-section"><h2>Overnight Stress</h2><canvas id="chart-stress"></canvas></div>
+    </div>
+
+    <!-- SLEEP TAB -->
+    <div id="sleep" class="tab-content">
+      <div class="chart-controls">
+        <select id="sleep-days" onchange="loadSleep()">
+          <option value="14">14 days</option>
+          <option value="30" selected>30 days</option>
+          <option value="60">60 days</option>
+          <option value="90">90 days</option>
+        </select>
+      </div>
+      <div id="sleep-averages" class="today-grid" style="margin-bottom:16px"></div>
+      <div class="chart-section"><h2>Duration, Stress &amp; Body Battery</h2><canvas id="chart-sleep-detail"></canvas></div>
+      <div class="chart-section">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Score</th><th>Duration</th><th>Deep</th><th>REM</th><th>Avg Stress</th><th>Body Battery</th></tr>
+          </thead>
+          <tbody id="sleep-body"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- ACTIVITIES TAB -->
@@ -156,6 +179,7 @@ function showTab(name, btn) {
   document.getElementById(name).classList.add('active');
   btn.classList.add('active');
   if (name === 'trends') loadTrends();
+  if (name === 'sleep') loadSleep();
   if (name === 'activities') loadActivities();
 }
 
@@ -417,6 +441,138 @@ function renderStressChart(trend) {
     },
     options: baseOpts,
   });
+}
+
+// ── Sleep ─────────────────────────────────────────────────────────────────
+function sleepRowColor(r, sleepMinH, stressLow, stressHigh) {
+  // badSleep: 0 = perfect, 1 = well below minimum
+  const badSleep = r.duration_hours != null
+    ? Math.max(0, Math.min(1, (sleepMinH - r.duration_hours) / sleepMinH))
+    : null;
+  // badStress: 0 = at or below low threshold, 1 = at or above high threshold
+  const badStress = r.overnight_stress != null
+    ? Math.max(0, Math.min(1, (r.overnight_stress - stressLow) / (stressHigh - stressLow)))
+    : null;
+
+  // Both missing — no color
+  if (badSleep === null && badStress === null) return 'transparent';
+
+  // Use available dimension(s)
+  const s = badSleep ?? 0;
+  const t = badStress ?? 0;
+
+  // Rule: both bad = red, one bad = amber, both good = green
+  // Implemented as: badness = average of the two dimensions, but
+  // if either is truly bad (>0.5) and the other is also bad, amplify toward red.
+  const avg = (s + t) / 2;
+  const bothBad = s > 0.5 && t > 0.5;
+  const badness = bothBad ? Math.min(1, avg * 1.4) : avg;
+
+  // Interpolate green(0) → amber(0.5) → red(1)
+  let r_, g_, b_;
+  if (badness <= 0.5) {
+    const x = badness * 2;            // 0→1 over green→amber
+    r_ = Math.round(34  + (245 - 34)  * x);
+    g_ = Math.round(197 + (158 - 197) * x);
+    b_ = Math.round(94  + (11  - 94)  * x);
+  } else {
+    const x = (badness - 0.5) * 2;   // 0→1 over amber→red
+    r_ = Math.round(245 + (239 - 245) * x);
+    g_ = Math.round(158 + (68  - 158) * x);
+    b_ = Math.round(11  + (68  - 11)  * x);
+  }
+  return `rgba(${r_},${g_},${b_},0.12)`;
+}
+
+async function loadSleep() {
+  const days = document.getElementById('sleep-days').value;
+  const d = await fetch(`/api/sleep?days=${days}`).then(r => r.json());
+
+  const av = d.averages;
+  const avCards = [
+    { label: 'Avg Sleep Score', value: av.sleep_score ?? '—', sub: `${days}-day avg` },
+    { label: 'Avg Duration', value: av.duration_hours ? `${av.duration_hours}h` : '—', sub: '' },
+    { label: 'Avg Overnight Stress', value: av.overnight_stress ?? '—', sub: '' },
+    { label: 'Avg Body Battery', value: av.body_battery ?? '—', sub: 'at wake' },
+    { label: 'Avg Deep Sleep', value: av.deep_min ? `${av.deep_min}m` : '—', sub: '' },
+    { label: 'Avg REM Sleep', value: av.rem_min ? `${av.rem_min}m` : '—', sub: '' },
+  ];
+  document.getElementById('sleep-averages').innerHTML = avCards.map(c => `
+    <div class="metric-card">
+      <div class="label">${c.label}</div>
+      <div class="value">${c.value}</div>
+      ${c.sub ? `<div class="sub">${c.sub}</div>` : ''}
+    </div>`).join('');
+
+  // Chart — duration bars, stress + body battery lines
+  const rows = [...d.data].reverse();
+  const labels = rows.map(r => r.date.slice(5));
+  mkChart('chart-sleep-detail', {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Duration (hrs)',
+          data: rows.map(r => r.duration_hours),
+          backgroundColor: 'rgba(99,102,241,0.6)',
+          yAxisID: 'y',
+          order: 3,
+        },
+        {
+          label: 'Overnight Stress',
+          data: rows.map(r => r.overnight_stress),
+          type: 'line',
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239,68,68,0.1)',
+          tension: 0.3,
+          pointRadius: 2,
+          yAxisID: 'y2',
+          order: 1,
+        },
+        {
+          label: 'Body Battery',
+          data: rows.map(r => r.body_battery),
+          type: 'line',
+          borderColor: '#22c55e',
+          tension: 0.3,
+          pointRadius: 2,
+          yAxisID: 'y2',
+          order: 2,
+        },
+      ],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: baseOpts.scales.x,
+        y: { ...baseOpts.scales.y, title: { display: true, text: 'Hours', color: '#94a3b8' } },
+        y2: { position: 'right', min: 0, max: 100, ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { drawOnChartArea: false } },
+      },
+    },
+  });
+
+  // Table
+  const tbody = document.getElementById('sleep-body');
+  if (!d.data.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">No data.</td></tr>';
+    return;
+  }
+  const { sleep_min_hours, stress_low, stress_high } = d.thresholds;
+
+  tbody.innerHTML = d.data.map(r => {
+    const rowBg = sleepRowColor(r, sleep_min_hours, stress_low, stress_high);
+    return `
+    <tr style="background:${rowBg}">
+      <td>${r.date}</td>
+      <td>${r.sleep_score ?? '—'}</td>
+      <td>${r.duration_hours ? `${r.duration_hours}h` : '—'}</td>
+      <td>${r.deep_min ? `${r.deep_min}m` : '—'}</td>
+      <td>${r.rem_min ? `${r.rem_min}m` : '—'}</td>
+      <td>${r.overnight_stress ?? '—'}</td>
+      <td>${r.body_battery ?? '—'}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ── Activities ────────────────────────────────────────────────────────────

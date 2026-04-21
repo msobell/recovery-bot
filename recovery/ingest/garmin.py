@@ -75,10 +75,12 @@ def fetch_rhr(api: Garmin, day: date) -> dict:
 def fetch_overnight_stress(api: Garmin, day: date) -> dict:
     ds = day.strftime("%Y-%m-%d")
     try:
-        data = api.get_stress_data(ds)
+        data = api.get_sleep_data(ds)
+        daily = data.get("dailySleepDTO", {})
+        stress_score = daily.get("sleepScores", {}).get("stress", {})
         return {
-            "overnight_stress_avg": data.get("avgStressLevel"),
-            "overnight_stress_qualifier": data.get("stressQualifier"),
+            "overnight_stress_avg": daily.get("avgSleepStress"),
+            "overnight_stress_qualifier": stress_score.get("qualifierKey"),
         }
     except Exception:
         return {}

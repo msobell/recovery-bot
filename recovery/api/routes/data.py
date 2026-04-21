@@ -218,6 +218,59 @@ def activity_detail(strava_id: int):
         session.close()
 
 
+@router.get("/sleep")
+def sleep(days: int = Query(default=30, ge=7, le=365)):
+    session = _session()
+    try:
+        end = date.today()
+        start = end - timedelta(days=days - 1)
+        rows = session.execute(
+            select(GarminDaily)
+            .where(GarminDaily.date >= start, GarminDaily.date <= end)
+            .order_by(GarminDaily.date.desc())
+        ).scalars().all()
+
+        data = []
+        for r in rows:
+            duration_h = round(r.sleep_duration_min / 60, 2) if r.sleep_duration_min else None
+            data.append({
+                "date": str(r.date),
+                "sleep_score": r.sleep_score,
+                "duration_hours": duration_h,
+                "deep_min": r.sleep_deep_min,
+                "rem_min": r.sleep_rem_min,
+                "light_min": r.sleep_light_min,
+                "awake_min": r.sleep_awake_min,
+                "overnight_stress": round(r.overnight_stress_avg, 1) if r.overnight_stress_avg else None,
+                "body_battery": r.body_battery_start,
+            })
+
+        valid = [d for d in data if d["sleep_score"] is not None]
+        avg = lambda key: round(sum(d[key] for d in valid if d[key]) / max(sum(1 for d in valid if d[key]), 1), 1)
+
+        from recovery import config as cfg_mod
+        cfg = cfg_mod.get()
+        return {
+            "days": days,
+            "thresholds": {
+                "sleep_min_hours": cfg.recovery.sleep_min_hours,
+                "stress_low": cfg.recovery.overnight_stress_low,
+                "stress_high": cfg.recovery.overnight_stress_high,
+            },
+            "averages": {
+                "sleep_score": avg("sleep_score"),
+                "duration_hours": avg("duration_hours"),
+                "overnight_stress": avg("overnight_stress"),
+                "body_battery": avg("body_battery"),
+                "deep_min": avg("deep_min"),
+                "rem_min": avg("rem_min"),
+            },
+            "data": data,
+        }
+    finally:
+        session.close()
+
+
 @router.get("/trend")
 def trend(days: int = Query(default=30, ge=7, le=365)):
     session = _session()
