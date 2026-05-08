@@ -32,11 +32,12 @@ def fetch_hrv(api: Garmin, day: date) -> dict:
     try:
         data = api.get_hrv_data(ds) or {}
         summary = data.get("hrvSummary", {})
+        baseline = summary.get("baseline", {})
         return {
             "hrv_status": summary.get("status"),
-            "hrv_rmssd": summary.get("lastNight"),
-            "hrv_baseline_low": summary.get("baselineLowUpper"),
-            "hrv_baseline_high": summary.get("baselineBalancedUpper"),
+            "hrv_rmssd": summary.get("lastNightAvg"),
+            "hrv_baseline_low": baseline.get("lowUpper"),
+            "hrv_baseline_high": baseline.get("balancedUpper"),
         }
     except Exception:
         return {}
@@ -95,6 +96,18 @@ def fetch_body_battery(api: Garmin, day: date) -> dict:
             values = [r[1] for r in readings if len(r) > 1 and r[1] is not None]
             if values:
                 return {"body_battery_start": max(values)}
+        return {}
+    except Exception:
+        return {}
+
+
+def fetch_steps(api: Garmin, day: date) -> dict:
+    ds = day.strftime("%Y-%m-%d")
+    try:
+        data = api.get_steps_data(ds)
+        if data and isinstance(data, list):
+            total = sum(entry.get("steps", 0) or 0 for entry in data)
+            return {"steps": total if total > 0 else None}
         return {}
     except Exception:
         return {}
@@ -189,5 +202,6 @@ def fetch_day(day: date, api: Garmin | None = None, delay: float = 0.0) -> dict:
     result.update(fetch_rhr(api, day))
     result.update(fetch_overnight_stress(api, day))
     result.update(fetch_body_battery(api, day))
+    result.update(fetch_steps(api, day))
     return result
 

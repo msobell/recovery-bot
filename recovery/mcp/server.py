@@ -58,6 +58,7 @@ def get_today_status() -> dict:
                 "overnight_stress_avg": snapshot.overnight_stress_avg,
                 "overnight_stress_qualifier": snapshot.overnight_stress_qualifier,
                 "body_battery_on_wake": snapshot.body_battery_start,
+                "steps": snapshot.steps,
             }
 
         return result
@@ -86,6 +87,7 @@ def get_recovery_trend(days: int = 14) -> dict:
                 "sleep_score": s.sleep_score,
                 "sleep_duration_hours": round(s.sleep_duration_min / 60, 1) if s.sleep_duration_min else None,
                 "overnight_stress": s.overnight_stress_avg,
+                "steps": s.steps,
             })
 
         hrv_vals = [s.hrv_rmssd for s in snapshots if s.hrv_rmssd]
@@ -209,7 +211,7 @@ def get_training_load(days: int = 28) -> dict:
 def query_date_range(metric: str, start_date: str, end_date: str) -> dict:
     """
     Query any metric over a date range.
-    metric: one of 'hrv', 'sleep', 'rhr', 'stress', 'activities'
+    metric: one of 'hrv', 'sleep', 'rhr', 'stress', 'steps', 'activities'
     start_date / end_date: YYYY-MM-DD strings
     """
     from sqlalchemy import select
@@ -248,6 +250,7 @@ def query_date_range(metric: str, start_date: str, end_date: str) -> dict:
             "sleep": lambda r: {"sleep_score": r.sleep_score, "sleep_duration_hours": round(r.sleep_duration_min / 60, 1) if r.sleep_duration_min else None},
             "rhr": lambda r: {"resting_hr": r.resting_hr},
             "stress": lambda r: {"overnight_stress_avg": r.overnight_stress_avg, "qualifier": r.overnight_stress_qualifier},
+            "steps": lambda r: {"steps": r.steps},
         }
 
         extract = field_map.get(metric, lambda r: {})
@@ -396,12 +399,278 @@ def log_strength_note(note: str, exercises: list[str], date_str: str = "") -> st
     return save_memory(full_note, exercises, metadata={"type": "workout_note", "date": day})
 
 
+@mcp.tool()
+def get_weight_trend(days: int = 90) -> dict:
+    """
+    Get body weight trend over the past N days (default 90), including fat % and
+    derived lean mass. Data comes from TrendWeight (imported via `recovery import-weight`).
+
+    Returns day-by-day actual and trend values plus a summary with:
+    - current and starting trend weight
+    - total weight change
+    - lean mass estimate (trend_weight * (1 - trend_fat_pct/100))
+    - lean mass change over the window
+
+    Use this when the user asks about their weight, body composition, or fat loss.
+    Pass days=730 or days=1825 for multi-year views.
+    """
+    from sqlalchemy import select
+    from recovery.db.models import WeightEntry
+
+    session = _session()
+    try:
+        today = date.today()
+        start = today - timedelta(days=days - 1)
+
+        rows = session.execute(
+            select(WeightEntry)
+            .where(WeightEntry.date >= start, WeightEntry.date <= today)
+            .order_by(WeightEntry.date)
+        ).scalars().all()
+
+        data = [
+            {
+                "date": str(r.date),
+                "actual_weight_lbs": r.actual_weight_lbs,
+                "trend_weight_lbs": r.trend_weight_lbs,
+                "actual_fat_pct": r.actual_fat_pct,
+                "trend_fat_pct": r.trend_fat_pct,
+                "lean_mass_lbs": round(r.trend_weight_lbs * (1 - r.trend_fat_pct / 100), 1)
+                    if r.trend_weight_lbs and r.trend_fat_pct else None,
+                "weight_is_interpolated": bool(r.weight_is_interpolated),
+            }
+            for r in rows
+        ]
+
+        # Summary from first and last rows with trend data
+        with_trend = [d for d in data if d["trend_weight_lbs"]]
+        with_lean = [d for d in data if d["lean_mass_lbs"] is not None]
+
+        first = with_trend[0] if with_trend else None
+        last = with_trend[-1] if with_trend else None
+        first_lean = with_lean[0] if with_lean else None
+        last_lean = with_lean[-1] if with_lean else None
+
+        summary = {}
+        if first and last:
+            summary["start_date"] = first["date"]
+            summary["end_date"] = last["date"]
+            summary["start_trend_weight_lbs"] = first["trend_weight_lbs"]
+            summary["current_trend_weight_lbs"] = last["trend_weight_lbs"]
+            summary["weight_change_lbs"] = round(last["trend_weight_lbs"] - first["trend_weight_lbs"], 1)
+            summary["start_fat_pct"] = first["trend_fat_pct"]
+            summary["current_fat_pct"] = last["trend_fat_pct"]
+        if first_lean and last_lean:
+            summary["start_lean_mass_lbs"] = first_lean["lean_mass_lbs"]
+            summary["current_lean_mass_lbs"] = last_lean["lean_mass_lbs"]
+            summary["lean_mass_change_lbs"] = round(last_lean["lean_mass_lbs"] - first_lean["lean_mass_lbs"], 1)
+
+        return {
+            "days_requested": days,
+            "days_available": len(data),
+            "summary": summary,
+            "data": data,
+        }
+    finally:
+        session.close()
+
+
+@mcp.tool()
+def get_body_composition_vs_training(days: int = 90) -> dict:
+    """
+    Correlate body composition changes (lean mass, fat %) with strength training
+    over the past N days (default 90).
+
+    Returns:
+    - lean mass trend (start → current)
+    - fat % trend (start → current)
+    - strength training frequency and volume over the period
+    - monthly snapshots pairing lean mass with training load, so Claude can reason
+      about whether muscle is being gained or lost relative to training
+
+    Use this when the user asks questions like:
+    - 'Am I gaining muscle?'
+    - 'How is my body composition trending?'
+    - 'Is my strength training affecting my lean mass?'
+    - 'What does my body recomposition look like?'
+    """
+    from sqlalchemy import select
+    from recovery.db.models import WeightEntry, GarminActivity, GarminStrengthSet
+
+    session = _session()
+    try:
+        today = date.today()
+        start = today - timedelta(days=days - 1)
+
+        # Weight + body comp data
+        weight_rows = session.execute(
+            select(WeightEntry)
+            .where(WeightEntry.date >= start, WeightEntry.date <= today)
+            .order_by(WeightEntry.date)
+        ).scalars().all()
+
+        # Strength sessions
+        strength_acts = session.execute(
+            select(GarminActivity)
+            .where(GarminActivity.date >= start, GarminActivity.date <= today)
+            .order_by(GarminActivity.date)
+        ).scalars().all()
+
+        # Build weekly bins (Mon-Sun) to co-locate body comp + training volume
+        from collections import defaultdict
+        import math
+
+        def week_key(d: date) -> str:
+            # ISO week start (Monday)
+            monday = d - timedelta(days=d.weekday())
+            return str(monday)
+
+        weight_by_week: dict[str, list] = defaultdict(list)
+        for r in weight_rows:
+            if r.trend_weight_lbs and r.trend_fat_pct:
+                lean = round(r.trend_weight_lbs * (1 - r.trend_fat_pct / 100), 1)
+                weight_by_week[week_key(r.date)].append({
+                    "trend_weight": r.trend_weight_lbs,
+                    "trend_fat_pct": r.trend_fat_pct,
+                    "lean_mass": lean,
+                })
+
+        strength_by_week: dict[str, dict] = defaultdict(lambda: {"sessions": 0, "total_sets": 0, "total_volume_lbs": 0})
+        for act in strength_acts:
+            wk = week_key(act.date)
+            strength_by_week[wk]["sessions"] += 1
+            for s in act.sets:
+                strength_by_week[wk]["total_sets"] += 1
+                if s.weight_g and s.reps:
+                    lbs = s.weight_g * _G_TO_LBS
+                    strength_by_week[wk]["total_volume_lbs"] += round(lbs * s.reps)
+
+        # Merge weeks
+        all_weeks = sorted(set(weight_by_week) | set(strength_by_week))
+        weekly = []
+        for wk in all_weeks:
+            comp = weight_by_week.get(wk, [])
+            avg_lean = round(sum(c["lean_mass"] for c in comp) / len(comp), 1) if comp else None
+            avg_fat = round(sum(c["trend_fat_pct"] for c in comp) / len(comp), 1) if comp else None
+            avg_weight = round(sum(c["trend_weight"] for c in comp) / len(comp), 1) if comp else None
+            st = strength_by_week.get(wk, {})
+            weekly.append({
+                "week_starting": wk,
+                "avg_trend_weight_lbs": avg_weight,
+                "avg_lean_mass_lbs": avg_lean,
+                "avg_fat_pct": avg_fat,
+                "strength_sessions": st.get("sessions", 0),
+                "total_sets": st.get("total_sets", 0),
+                "total_volume_lbs": st.get("total_volume_lbs", 0),
+            })
+
+        # Overall summary
+        with_lean = [w for w in weekly if w["avg_lean_mass_lbs"] is not None]
+        lean_change = None
+        if len(with_lean) >= 2:
+            lean_change = round(with_lean[-1]["avg_lean_mass_lbs"] - with_lean[0]["avg_lean_mass_lbs"], 1)
+
+        total_sessions = sum(w["strength_sessions"] for w in weekly)
+        total_volume = sum(w["total_volume_lbs"] for w in weekly)
+        weeks_with_training = sum(1 for w in weekly if w["strength_sessions"] > 0)
+
+        return {
+            "days": days,
+            "lean_mass_change_lbs": lean_change,
+            "total_strength_sessions": total_sessions,
+            "total_lifting_volume_lbs": total_volume,
+            "weeks_with_strength_training": weeks_with_training,
+            "avg_sessions_per_week": round(total_sessions / max(len(weekly), 1), 1),
+            "weekly": weekly,
+        }
+    finally:
+        session.close()
+
+
 def _sport_breakdown(rows) -> dict:
     breakdown: dict[str, int] = {}
     for r in rows:
         sport = r.sport_type or "Unknown"
         breakdown[sport] = breakdown.get(sport, 0) + 1
     return breakdown
+
+
+@mcp.tool()
+def sync_missing_days() -> dict:
+    """
+    Find all dates that are missing from the local database and sync them from Garmin.
+    Covers daily metrics (HRV, sleep, RHR, stress, body battery, steps) and strength
+    activities. Looks back from today to the earliest date already in the DB, filling
+    any gaps. Also syncs yesterday and today if not yet present.
+    Call this when the user wants to catch up on missing data or run a manual sync.
+    """
+    from sqlalchemy import select, func
+    from recovery.db.models import GarminDaily
+    from recovery.ingest import garmin
+    from recovery.ingest.sync import _upsert_garmin, _upsert_strength
+
+    session = _session()
+    try:
+        earliest = session.execute(select(func.min(GarminDaily.date))).scalar()
+        if not earliest:
+            return {"error": "No existing data found. Run a full backfill first."}
+
+        # Build set of dates we already have
+        existing = set(
+            session.execute(select(GarminDaily.date)).scalars().all()
+        )
+
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+
+        # All dates from earliest to yesterday (don't attempt today — data may be incomplete)
+        all_dates = []
+        current = earliest
+        while current <= yesterday:
+            if current not in existing:
+                all_dates.append(current)
+            current += timedelta(days=1)
+
+        # Always re-sync yesterday and today even if present (data finalises overnight)
+        for d in [yesterday, today]:
+            if d not in all_dates:
+                all_dates.append(d)
+
+        if not all_dates:
+            return {"synced": 0, "message": "No missing days found — already up to date."}
+
+        all_dates.sort()
+        api = garmin.load_session()
+
+        synced = 0
+        errors = []
+        for d in all_dates:
+            try:
+                data = garmin.fetch_day(d, api=api, delay=1.1)
+                _upsert_garmin(session, data)
+                session.commit()
+                synced += 1
+            except Exception as e:
+                session.rollback()
+                errors.append(f"{d}: {e}")
+
+            try:
+                acts = garmin.fetch_strength_activities(api, d)
+                for act in acts:
+                    _upsert_strength(session, act)
+                session.commit()
+            except Exception as e:
+                session.rollback()
+                errors.append(f"{d} strength: {e}")
+
+        return {
+            "dates_checked": (yesterday - earliest).days + 1,
+            "refreshed": synced,
+            "errors": errors if errors else None,
+            "message": f"Refreshed {synced} day(s)." + (f" {len(errors)} error(s)." if errors else ""),
+        }
+    finally:
+        session.close()
 
 
 def run_mcp():

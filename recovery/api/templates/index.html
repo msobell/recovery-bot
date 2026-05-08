@@ -102,6 +102,8 @@
       <button onclick="showTab('trends', this)">Trends</button>
       <button onclick="showTab('sleep', this)">Sleep</button>
       <button onclick="showTab('activities', this)">Activities</button>
+      <button onclick="showTab('weight', this)">Weight</button>
+      <button onclick="showTab('metrics', this)">Metrics</button>
     </nav>
   </header>
 
@@ -149,6 +151,30 @@
       </div>
     </div>
 
+    <!-- WEIGHT TAB -->
+    <div id="weight" class="tab-content">
+      <div class="chart-controls">
+        <select id="weight-days" onchange="loadWeight()">
+          <option value="30">30 days</option>
+          <option value="60">60 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="180">180 days</option>
+          <option value="365">1 year</option>
+          <option value="1825">All time</option>
+        </select>
+      </div>
+      <div id="weight-summary" class="today-grid" style="margin-bottom:16px"></div>
+      <div class="chart-section"><h2>Weight Trend</h2><canvas id="chart-weight"></canvas></div>
+      <div class="chart-section">
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Weight (lbs)</th><th>Trend (lbs)</th><th>Fat %</th><th>Trend Fat %</th></tr>
+          </thead>
+          <tbody id="weight-body"><tr><td colspan="5" style="color:var(--muted)">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- ACTIVITIES TAB -->
     <div id="activities" class="tab-content">
       <div class="chart-controls">
@@ -168,6 +194,29 @@
         </table>
       </div>
     </div>
+    <!-- METRICS TAB -->
+    <div id="metrics" class="tab-content">
+      <div class="chart-controls">
+        <select id="metrics-days" onchange="loadMetrics()">
+          <option value="7">7 days</option>
+          <option value="14">14 days</option>
+          <option value="30">30 days</option>
+          <option value="90" selected>90 days</option>
+          <option value="180">180 days</option>
+        </select>
+        <select id="metrics-ma" onchange="loadMetrics()">
+          <option value="3">3-day avg</option>
+          <option value="7" selected>7-day avg</option>
+          <option value="10">10-day avg</option>
+          <option value="14">14-day avg</option>
+          <option value="30">30-day avg</option>
+        </select>
+      </div>
+      <div class="chart-section"><h2>Steps — 7-day moving average</h2><canvas id="chart-steps-ma"></canvas></div>
+      <div class="chart-section"><h2>Sleep Duration — 7-day moving average (hours)</h2><canvas id="chart-sleep-ma"></canvas></div>
+      <div class="chart-section"><h2>HRV RMSSD — 7-day moving average (ms)</h2><canvas id="chart-hrv-ma"></canvas></div>
+      <div class="chart-section"><h2>Resting Heart Rate — 7-day moving average (bpm)</h2><canvas id="chart-rhr-ma"></canvas></div>
+    </div>
   </main>
 
 <script>
@@ -181,6 +230,8 @@ function showTab(name, btn) {
   if (name === 'trends') loadTrends();
   if (name === 'sleep') loadSleep();
   if (name === 'activities') loadActivities();
+  if (name === 'weight') loadWeight();
+  if (name === 'metrics') loadMetrics();
 }
 
 // ── Today ─────────────────────────────────────────────────────────────────
@@ -596,6 +647,148 @@ async function loadActivities() {
       <td><a href="https://www.strava.com/activities/${a.id}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.8rem;text-decoration:none" title="View on Strava">↗</a></td>
     </tr>
   `).join('');
+}
+
+// ── Weight ────────────────────────────────────────────────────────────────
+async function loadWeight() {
+  const days = document.getElementById('weight-days').value;
+  const d = await fetch(`/api/weight?days=${days}`).then(r => r.json());
+
+  const latest = d.latest || {};
+  const av = d.averages || {};
+  const sumCards = [
+    { label: 'Current Trend', value: latest.trend_weight_lbs ? `${latest.trend_weight_lbs.toFixed(1)} lbs` : '—', sub: latest.date || '' },
+    { label: 'Avg Weight', value: av.actual_weight_lbs ? `${av.actual_weight_lbs} lbs` : '—', sub: `${days}-day avg` },
+    { label: 'Current Body Fat', value: latest.trend_fat_pct ? `${latest.trend_fat_pct.toFixed(1)}%` : '—', sub: '' },
+    { label: 'Avg Body Fat', value: av.actual_fat_pct ? `${av.actual_fat_pct}%` : '—', sub: `${days}-day avg` },
+  ];
+  document.getElementById('weight-summary').innerHTML = sumCards.map(c => `
+    <div class="metric-card">
+      <div class="label">${c.label}</div>
+      <div class="value">${c.value}</div>
+      ${c.sub ? `<div class="sub">${c.sub}</div>` : ''}
+    </div>`).join('');
+
+  const rows = [...d.data].reverse();
+  const labels = rows.map(r => r.date.slice(5));
+
+  mkChart('chart-weight', {
+    type: 'scatter',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Actual Weight',
+          data: rows.map((r, i) => r.weight_is_interpolated ? null : { x: i, y: r.actual_weight_lbs }),
+          backgroundColor: 'rgba(99,102,241,0.5)',
+          pointRadius: 3,
+          showLine: false,
+          order: 2,
+        },
+        {
+          label: 'Trend Weight',
+          data: rows.map((r, i) => ({ x: i, y: r.trend_weight_lbs })),
+          type: 'line',
+          borderColor: '#22c55e',
+          backgroundColor: 'rgba(34,197,94,0)',
+          tension: 0.4,
+          pointRadius: 0,
+          fill: false,
+          order: 1,
+        },
+      ],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: {
+          type: 'linear',
+          ticks: {
+            color: '#94a3b8',
+            font: { size: 11 },
+            maxTicksLimit: 10,
+            callback: (val) => labels[val] || '',
+          },
+          grid: { color: gridColor },
+        },
+        y: { ...baseOpts.scales.y, title: { display: true, text: 'lbs', color: '#94a3b8' } },
+      },
+    },
+  });
+
+  const tbody = document.getElementById('weight-body');
+  if (!d.data.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted)">No weight data. Run: recovery import-weight &lt;file.csv&gt;</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.data.map(r => `
+    <tr>
+      <td>${r.date}</td>
+      <td style="color:${r.weight_is_interpolated ? 'var(--muted)' : 'inherit'}">${r.actual_weight_lbs ? r.actual_weight_lbs.toFixed(1) : '—'}</td>
+      <td>${r.trend_weight_lbs ? r.trend_weight_lbs.toFixed(1) : '—'}</td>
+      <td style="color:${r.fat_is_interpolated ? 'var(--muted)' : 'inherit'}">${r.actual_fat_pct ? r.actual_fat_pct.toFixed(1) + '%' : '—'}</td>
+      <td>${r.trend_fat_pct ? r.trend_fat_pct.toFixed(1) + '%' : '—'}</td>
+    </tr>`).join('');
+}
+
+// ── Metrics (7-day moving averages) ──────────────────────────────────────
+function movingAvg(values, window) {
+  return values.map((_, i) => {
+    const slice = values.slice(Math.max(0, i - window + 1), i + 1).filter(v => v != null);
+    return slice.length > 0 ? Math.round((slice.reduce((a, b) => a + b, 0) / slice.length) * 10) / 10 : null;
+  });
+}
+
+function maLineChart(id, label, color, labels, rawValues, rawLabel, window = 7) {
+  const ma = movingAvg(rawValues, window);
+  mkChart(id, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: rawLabel,
+          data: rawValues,
+          borderColor: color.replace('1)', '0.25)'),
+          backgroundColor: 'transparent',
+          borderWidth: 1,
+          pointRadius: 0,
+          tension: 0.2,
+          order: 2,
+        },
+        {
+          label: `${label} (${window}d avg)`,
+          data: ma,
+          borderColor: color,
+          backgroundColor: color.replace('1)', '0.08)'),
+          borderWidth: 2.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.4,
+          order: 1,
+        },
+      ],
+    },
+    options: {
+      ...baseOpts,
+      scales: {
+        x: { ...baseOpts.scales.x, ticks: { ...baseOpts.scales.x.ticks, maxTicksLimit: 10 } },
+        y: { ...baseOpts.scales.y },
+      },
+    },
+  });
+}
+
+async function loadMetrics() {
+  const days = document.getElementById('metrics-days').value;
+  const ma = parseInt(document.getElementById('metrics-ma').value);
+  const trend = await fetch(`/api/trend?days=${days}`).then(r => r.json());
+  const labels = trend.labels.map(l => l.slice(5));
+
+  maLineChart('chart-steps-ma', 'Steps', 'rgba(99,102,241,1)', labels, trend.steps, 'Daily steps', ma);
+  maLineChart('chart-sleep-ma', 'Sleep', 'rgba(132,204,22,1)', labels, trend.sleep_hours, 'Nightly hours', ma);
+  maLineChart('chart-hrv-ma', 'HRV', 'rgba(34,197,94,1)', labels, trend.hrv, 'Daily HRV (ms)', ma);
+  maLineChart('chart-rhr-ma', 'RHR', 'rgba(245,158,11,1)', labels, trend.resting_hr, 'Daily RHR (bpm)', ma);
 }
 
 // Init

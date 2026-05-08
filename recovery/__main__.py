@@ -178,6 +178,67 @@ def _install_mcp():
     console.print("Restart Claude Desktop to load the server.")
 
 
+@cli.command("import-weight")
+@click.argument("csv_path", type=click.Path(exists=True))
+def import_weight(csv_path):
+    """Import TrendWeight CSV export into the database."""
+    import csv
+    from datetime import datetime
+    from recovery.db.models import WeightEntry
+    from recovery.db.session import get_session, init_db
+
+    session = get_session(init_db())
+    added = updated = 0
+    now = datetime.now()
+
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            raw_date = row["Date"].strip()
+            try:
+                d = datetime.strptime(raw_date, "%Y-%m-%d").date()
+            except ValueError:
+                try:
+                    d = datetime.strptime(raw_date, "%m/%d/%Y").date()
+                except ValueError:
+                    continue
+
+            def _float(val):
+                v = val.strip() if val else ""
+                return float(v) if v else None
+
+            def _bool(val):
+                v = val.strip().lower() if val else ""
+                return v in ("true", "1", "yes") if v else None
+
+            entry = session.get(WeightEntry, d)
+            if entry:
+                entry.actual_weight_lbs = _float(row.get("Actual Weight", ""))
+                entry.weight_is_interpolated = _bool(row.get("Weight Is Interpolated", ""))
+                entry.trend_weight_lbs = _float(row.get("Trend Weight", ""))
+                entry.actual_fat_pct = _float(row.get("Actual Fat %", ""))
+                entry.fat_is_interpolated = _bool(row.get("Fat Is Interpolated", ""))
+                entry.trend_fat_pct = _float(row.get("Trend Fat %", ""))
+                entry.imported_at = now
+                updated += 1
+            else:
+                session.add(WeightEntry(
+                    date=d,
+                    actual_weight_lbs=_float(row.get("Actual Weight", "")),
+                    weight_is_interpolated=_bool(row.get("Weight Is Interpolated", "")),
+                    trend_weight_lbs=_float(row.get("Trend Weight", "")),
+                    actual_fat_pct=_float(row.get("Actual Fat %", "")),
+                    fat_is_interpolated=_bool(row.get("Fat Is Interpolated", "")),
+                    trend_fat_pct=_float(row.get("Trend Fat %", "")),
+                    imported_at=now,
+                ))
+                added += 1
+
+    session.commit()
+    session.close()
+    console.print(f"[green]Weight import done. {added} added, {updated} updated.[/green]")
+
+
 @cli.command()
 @click.argument("action", type=click.Choice(["install", "uninstall", "status"]))
 def schedule(action):

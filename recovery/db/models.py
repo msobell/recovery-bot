@@ -35,6 +35,9 @@ class GarminDaily(Base):
     # Body battery
     body_battery_start: Mapped[int | None] = mapped_column(Integer)
 
+    # Steps
+    steps: Mapped[int | None] = mapped_column(Integer)
+
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
@@ -87,6 +90,19 @@ class GarminStrengthSet(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime)
 
     activity: Mapped["GarminActivity"] = relationship("GarminActivity", back_populates="sets")
+
+
+class WeightEntry(Base):
+    __tablename__ = "weight_entries"
+
+    date: Mapped[date] = mapped_column(Date, primary_key=True)
+    actual_weight_lbs: Mapped[float | None] = mapped_column(Float)
+    weight_is_interpolated: Mapped[bool | None] = mapped_column(Integer)  # stored as 0/1
+    trend_weight_lbs: Mapped[float | None] = mapped_column(Float)
+    actual_fat_pct: Mapped[float | None] = mapped_column(Float)
+    fat_is_interpolated: Mapped[bool | None] = mapped_column(Integer)
+    trend_fat_pct: Mapped[float | None] = mapped_column(Float)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
 class SyncLog(Base):

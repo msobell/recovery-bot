@@ -43,6 +43,7 @@ class DailySnapshot:
     overnight_stress_avg: float | None
     overnight_stress_qualifier: str | None
     body_battery_start: int | None
+    steps: int | None
 
 
 @dataclass
@@ -72,6 +73,7 @@ def get_snapshot(session: Session, day: date) -> DailySnapshot | None:
         overnight_stress_avg=row.overnight_stress_avg,
         overnight_stress_qualifier=row.overnight_stress_qualifier,
         body_battery_start=row.body_battery_start,
+        steps=row.steps,
     )
 
 
@@ -98,6 +100,7 @@ def get_trend(session: Session, days: int = 14) -> list[DailySnapshot]:
             overnight_stress_avg=r.overnight_stress_avg,
             overnight_stress_qualifier=r.overnight_stress_qualifier,
             body_battery_start=r.body_battery_start,
+            steps=r.steps,
         )
         for r in rows
     ]

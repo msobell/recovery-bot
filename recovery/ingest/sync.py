@@ -43,12 +43,22 @@ def _upsert_strength(session: Session, activity: dict) -> bool:
         existing.duration_sec = activity.get("duration_sec") or existing.duration_sec
         existing.avg_hr = activity.get("avg_hr") or existing.avg_hr
         existing.synced_at = datetime.now()
-        # Drop and re-insert sets so set_index stays canonical
+        # Preserve user-set category overrides and manual reps/weight edits by set_index
+        user_edits = {
+            s.set_index: {
+                "exercise_category_override": s.exercise_category_override,
+                "reps": s.reps,
+                "weight_g": s.weight_g,
+            }
+            for s in existing.sets
+            if s.exercise_category_override is not None
+        }
         for s in list(existing.sets):
             session.delete(s)
         session.flush()
         act = existing
     else:
+        user_edits = {}
         act = GarminActivity(
             garmin_id=garmin_id,
             date=activity["date"],
@@ -62,12 +72,17 @@ def _upsert_strength(session: Session, activity: dict) -> bool:
         session.flush()
 
     for s in activity.get("sets", []):
+        idx = s["set_index"]
+        edits = user_edits.get(idx, {})
+        # If the user manually edited this set, keep their reps/weight; otherwise use Garmin's
+        has_override = bool(edits.get("exercise_category_override"))
         session.add(GarminStrengthSet(
             garmin_activity_id=garmin_id,
-            set_index=s["set_index"],
+            set_index=idx,
             exercise_category=s.get("exercise_category"),
-            reps=s.get("reps"),
-            weight_g=s.get("weight_g"),
+            exercise_category_override=edits.get("exercise_category_override"),
+            reps=edits["reps"] if has_override else s.get("reps"),
+            weight_g=edits["weight_g"] if has_override else s.get("weight_g"),
             duration_sec=s.get("duration_sec"),
             start_time=datetime.fromisoformat(s["start_time"]) if s.get("start_time") else None,
         ))

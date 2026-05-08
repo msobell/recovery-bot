@@ -98,12 +98,13 @@ The MCP server exposes these tools to Claude Desktop:
 
 | Tool | Description |
 |---|---|
-| `get_today_status` | HRV, sleep, RHR, stress — full recovery assessment |
+| `get_today_status` | HRV, sleep, RHR, stress, steps — full recovery assessment |
 | `get_recovery_trend` | Day-by-day trends over N days |
 | `get_recent_activities` | Recent Strava activities with effort scores |
 | `get_training_load` | Acute vs chronic load, sport breakdown |
 | `recommend_workout` | Recovery-aware workout recommendation with equipment constraints |
-| `query_date_range` | Query any metric over a custom date range |
+| `query_date_range` | Query any metric (hrv, sleep, rhr, stress, steps, activities) over a custom date range |
+| `sync_missing_days` | Fetch any missing days from Garmin and refresh yesterday + today |
 | `save_memory` | Persist a note (preference, observation, injury) across sessions |
 | `query_memory` | Hybrid keyword + semantic search over saved notes |
 | `get_related_entities` | Walk the knowledge graph for a concept or entity |

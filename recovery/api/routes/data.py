@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from recovery.analysis.recovery import assess, get_snapshot, get_trend, get_recent_activities
-from recovery.db.models import GarminActivity, GarminDaily, GarminStrengthSet, StravaActivity
+from recovery.db.models import GarminActivity, GarminDaily, GarminStrengthSet, StravaActivity, WeightEntry
 from recovery.db.session import get_session, init_db
 
 router = APIRouter(tags=["data"])
@@ -39,6 +39,7 @@ def today_status():
                 "overnight_stress": snapshot.overnight_stress_avg,
                 "overnight_stress_qualifier": snapshot.overnight_stress_qualifier,
                 "body_battery_start": snapshot.body_battery_start,
+                "steps": snapshot.steps,
             }
         return {
             "date": str(day),
@@ -64,6 +65,7 @@ _G_TO_LBS = 0.00220462
 _EXTRA_CATEGORIES = {
     "ONE_ARM_KETTLEBELL_SWING",
     "LEG_BAND_REHAB",
+    "DB_PRESS_EACH_ARM",
 }
 
 
@@ -243,6 +245,7 @@ def sleep(days: int = Query(default=30, ge=7, le=365)):
                 "awake_min": r.sleep_awake_min,
                 "overnight_stress": round(r.overnight_stress_avg, 1) if r.overnight_stress_avg else None,
                 "body_battery": r.body_battery_start,
+                "steps": r.steps,
             })
 
         valid = [d for d in data if d["sleep_score"] is not None]
@@ -285,6 +288,7 @@ def trend(days: int = Query(default=30, ge=7, le=365)):
             "sleep_score": [s.sleep_score for s in snapshots],
             "sleep_hours": [round(s.sleep_duration_min / 60, 1) if s.sleep_duration_min else None for s in snapshots],
             "overnight_stress": [s.overnight_stress_avg for s in snapshots],
+            "steps": [s.steps for s in snapshots],
         }
     finally:
         session.close()
@@ -317,6 +321,57 @@ def activities(days: int = Query(default=30, ge=1, le=365), sport: str | None = 
                 "suffer_score": r.suffer_score,
             })
         return {"days": days, "count": len(data), "activities": data}
+    finally:
+        session.close()
+
+
+@router.get("/weight")
+def weight(days: int = Query(default=90, ge=7, le=1825)):
+    session = _session()
+    try:
+        end = date.today()
+        start = end - timedelta(days=days - 1)
+        rows = session.execute(
+            select(WeightEntry)
+            .where(WeightEntry.date >= start, WeightEntry.date <= end)
+            .order_by(WeightEntry.date.desc())
+        ).scalars().all()
+
+        data = []
+        for r in rows:
+            data.append({
+                "date": str(r.date),
+                "actual_weight_lbs": r.actual_weight_lbs,
+                "trend_weight_lbs": r.trend_weight_lbs,
+                "actual_fat_pct": r.actual_fat_pct,
+                "trend_fat_pct": r.trend_fat_pct,
+                "weight_is_interpolated": bool(r.weight_is_interpolated),
+                "fat_is_interpolated": bool(r.fat_is_interpolated),
+            })
+
+        actual = [d["actual_weight_lbs"] for d in data if d["actual_weight_lbs"] and not d["weight_is_interpolated"]]
+        trend = [d["trend_weight_lbs"] for d in data if d["trend_weight_lbs"]]
+        fat = [d["actual_fat_pct"] for d in data if d["actual_fat_pct"] and not d["fat_is_interpolated"]]
+
+        def _avg(lst):
+            return round(sum(lst) / len(lst), 1) if lst else None
+
+        latest = next((d for d in data if d["trend_weight_lbs"]), None)
+
+        return {
+            "days": days,
+            "averages": {
+                "actual_weight_lbs": _avg(actual),
+                "trend_weight_lbs": _avg(trend),
+                "actual_fat_pct": _avg(fat),
+            },
+            "latest": {
+                "trend_weight_lbs": latest["trend_weight_lbs"] if latest else None,
+                "trend_fat_pct": latest["trend_fat_pct"] if latest else None,
+                "date": latest["date"] if latest else None,
+            },
+            "data": data,
+        }
     finally:
         session.close()
 
