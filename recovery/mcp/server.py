@@ -598,16 +598,17 @@ def _sport_breakdown(rows) -> dict:
 @mcp.tool()
 def sync_missing_days() -> dict:
     """
-    Find all dates that are missing from the local database and sync them from Garmin.
-    Covers daily metrics (HRV, sleep, RHR, stress, body battery, steps) and strength
-    activities. Looks back from today to the earliest date already in the DB, filling
-    any gaps. Also syncs yesterday and today if not yet present.
+    Find all dates that are missing from the local database and sync them from Garmin
+    and Strava. Covers daily metrics (HRV, sleep, RHR, stress, body battery, steps),
+    strength activities, and Strava cardio. Looks back from today to the earliest date
+    already in the DB, filling any gaps. Also syncs yesterday and today if not yet present.
     Call this when the user wants to catch up on missing data or run a manual sync.
     """
     from sqlalchemy import select, func
-    from recovery.db.models import GarminDaily
-    from recovery.ingest import garmin
-    from recovery.ingest.sync import _upsert_garmin, _upsert_strength
+    from recovery.db.models import GarminDaily, StravaActivity
+    from recovery.ingest import garmin, strava
+    from recovery.ingest.sync import _upsert_garmin, _upsert_strength, _upsert_strava
+    from recovery import config as cfg_mod
 
     session = _session()
     try:
@@ -615,15 +616,11 @@ def sync_missing_days() -> dict:
         if not earliest:
             return {"error": "No existing data found. Run a full backfill first."}
 
-        # Build set of dates we already have
-        existing = set(
-            session.execute(select(GarminDaily.date)).scalars().all()
-        )
+        existing = set(session.execute(select(GarminDaily.date)).scalars().all())
 
         today = date.today()
         yesterday = today - timedelta(days=1)
 
-        # All dates from earliest to yesterday (don't attempt today — data may be incomplete)
         all_dates = []
         current = earliest
         while current <= yesterday:
@@ -631,28 +628,25 @@ def sync_missing_days() -> dict:
                 all_dates.append(current)
             current += timedelta(days=1)
 
-        # Always re-sync yesterday and today even if present (data finalises overnight)
+        # Always re-sync yesterday and today (data finalises overnight)
         for d in [yesterday, today]:
             if d not in all_dates:
                 all_dates.append(d)
 
-        if not all_dates:
-            return {"synced": 0, "message": "No missing days found — already up to date."}
-
         all_dates.sort()
         api = garmin.load_session()
 
-        synced = 0
+        garmin_synced = 0
         errors = []
         for d in all_dates:
             try:
                 data = garmin.fetch_day(d, api=api, delay=1.1)
                 _upsert_garmin(session, data)
                 session.commit()
-                synced += 1
+                garmin_synced += 1
             except Exception as e:
                 session.rollback()
-                errors.append(f"{d}: {e}")
+                errors.append(f"{d} garmin: {e}")
 
             try:
                 acts = garmin.fetch_strength_activities(api, d)
@@ -663,11 +657,29 @@ def sync_missing_days() -> dict:
                 session.rollback()
                 errors.append(f"{d} strength: {e}")
 
+        # Strava: fetch everything since the last date in the DB
+        strava_synced = 0
+        try:
+            cfg = cfg_mod.get()
+            last_strava = session.execute(select(func.max(StravaActivity.date))).scalar()
+            strava_after = (last_strava + timedelta(days=1)) if last_strava else earliest
+            activities = strava.fetch_activities(
+                cfg.strava.client_id, cfg.strava.client_secret, after=strava_after
+            )
+            for act in activities:
+                if _upsert_strava(session, act):
+                    strava_synced += 1
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            errors.append(f"strava: {e}")
+
         return {
             "dates_checked": (yesterday - earliest).days + 1,
-            "refreshed": synced,
+            "garmin_days_refreshed": garmin_synced,
+            "strava_activities_synced": strava_synced,
             "errors": errors if errors else None,
-            "message": f"Refreshed {synced} day(s)." + (f" {len(errors)} error(s)." if errors else ""),
+            "message": f"Garmin: {garmin_synced} day(s), Strava: {strava_synced} activity(s)." + (f" {len(errors)} error(s)." if errors else ""),
         }
     finally:
         session.close()
