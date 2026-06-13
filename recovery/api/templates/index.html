@@ -4,56 +4,129 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Recovery Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     :root {
-      --bg: #0f1117;
-      --surface: #1a1d27;
-      --border: #2a2d3a;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
-      --excellent: #22c55e;
-      --good: #84cc16;
-      --moderate: #f59e0b;
-      --poor: #ef4444;
-      --accent: #6366f1;
+      --bg: #0a0c13;
+      --surface: #12151f;
+      --surface-2: #1a1e2c;
+      --border: rgba(148, 163, 184, 0.13);
+      --border-strong: rgba(148, 163, 184, 0.28);
+      --text: #e9edf5;
+      --muted: #8b94a9;
+      --excellent: #34d399;
+      --good: #a3e635;
+      --moderate: #fbbf24;
+      --poor: #f87171;
+      --accent: #818cf8;
+      --accent-2: #22d3ee;
+      --grad: linear-gradient(135deg, #6366f1 0%, #22d3ee 100%);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 15px; }
-    header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
-    header h1 { font-size: 1.1rem; font-weight: 600; }
-    header span { color: var(--muted); font-size: 0.9rem; }
-    nav { display: flex; gap: 4px; margin-left: auto; }
-    nav button { background: none; border: 1px solid var(--border); color: var(--muted); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: all 0.15s; }
-    nav button.active, nav button:hover { background: var(--accent); border-color: var(--accent); color: white; }
-    main { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
+    html { scrollbar-color: var(--surface-2) var(--bg); }
+    ::selection { background: rgba(99, 102, 241, 0.4); }
+    body {
+      background: var(--bg);
+      background-image:
+        radial-gradient(1100px 520px at 85% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+        radial-gradient(900px 480px at -10% 110%, rgba(34, 211, 238, 0.06), transparent 60%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+    button, select, input { font-family: inherit; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
-    /* Today card */
+    /* Header */
+    header {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(10, 12, 19, 0.78);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 32px;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .brand-mark {
+      width: 26px; height: 26px; border-radius: 8px;
+      background: var(--grad);
+      box-shadow: 0 0 18px rgba(99, 102, 241, 0.55);
+      position: relative; flex: none;
+    }
+    .brand-mark::after {
+      content: ""; position: absolute; inset: 0;
+      background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 7 12 10 5 14 19 17 12 21 12"/></svg>') center / 16px no-repeat;
+    }
+    header h1 { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+    .user-chip {
+      color: var(--muted); font-size: 0.8rem; font-weight: 500;
+      border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px;
+      background: var(--surface);
+    }
+    nav {
+      display: flex; gap: 2px; margin-left: auto;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 999px; padding: 3px;
+    }
+    nav button {
+      background: none; border: none; color: var(--muted);
+      padding: 6px 15px; border-radius: 999px; cursor: pointer;
+      font-size: 0.84rem; font-weight: 500;
+      transition: color 0.15s, background 0.2s, box-shadow 0.2s;
+    }
+    nav button:hover { color: var(--text); background: rgba(148, 163, 184, 0.1); }
+    nav button.active {
+      background: var(--grad); color: #fff; font-weight: 600;
+      box-shadow: 0 2px 10px rgba(99, 102, 241, 0.45);
+    }
+    main { padding: 28px 32px 48px; max-width: 1200px; margin: 0 auto; }
+    @media (max-width: 720px) { main { padding: 20px 16px 40px; } header { padding: 12px 16px; } }
+
+    /* Cards (shared surface treatment) */
+    .metric-card, .status-card, .activity-col, .chart-section {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 55%), var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    /* Today grid */
     .today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
-    .metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-    .metric-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-    .metric-card .value { font-size: 1.8rem; font-weight: 700; line-height: 1; }
-    .metric-card .sub { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
-    .status-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 24px; }
+    .metric-card { padding: 16px 18px; transition: border-color 0.2s, transform 0.2s; }
+    .metric-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+    .metric-card .label { font-size: 0.7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+    .metric-card .value { font-size: 1.9rem; font-weight: 700; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+    .metric-card .sub { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+
+    /* Status card */
+    .status-card { padding: 20px 22px; margin-bottom: 24px; }
     .status-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-    .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 20px; font-weight: 600; font-size: 0.9rem; }
-    .status-Excellent { background: rgba(34,197,94,0.15); color: var(--excellent); }
-    .status-Good { background: rgba(132,204,22,0.15); color: var(--good); }
-    .status-Moderate { background: rgba(245,158,11,0.15); color: var(--moderate); }
-    .status-Poor { background: rgba(239,68,68,0.15); color: var(--poor); }
-    .status-badge::before { content: "●"; }
+    .status-badge { display: inline-flex; align-items: center; gap: 7px; padding: 7px 16px; border-radius: 999px; font-weight: 650; font-size: 0.9rem; }
+    .status-badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; animation: pulse 2.4s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    .status-Excellent { background: rgba(52, 211, 153, 0.13); color: var(--excellent); box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.3); }
+    .status-Good { background: rgba(163, 230, 53, 0.12); color: var(--good); box-shadow: inset 0 0 0 1px rgba(163, 230, 53, 0.28); }
+    .status-Moderate { background: rgba(251, 191, 36, 0.12); color: var(--moderate); box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.28); }
+    .status-Poor { background: rgba(248, 113, 113, 0.12); color: var(--poor); box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.3); }
     .intensity-label { color: var(--muted); font-size: 0.9rem; }
-    .intensity-label strong { color: var(--text); }
-    ul.signals { list-style: none; margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
-    ul.signals li { font-size: 0.8rem; padding: 4px 10px; border-radius: 4px; background: rgba(99,102,241,0.1); color: var(--accent); }
-    ul.signals li.warning { background: rgba(239,68,68,0.1); color: var(--poor); }
+    .intensity-label strong { color: var(--text); font-weight: 650; }
+    ul.signals { list-style: none; margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+    ul.signals li { font-size: 0.78rem; font-weight: 500; padding: 4px 12px; border-radius: 999px; background: rgba(129, 140, 248, 0.1); color: var(--accent); border: 1px solid rgba(129, 140, 248, 0.2); }
+    ul.signals li.warning { background: rgba(248, 113, 113, 0.1); color: var(--poor); border-color: rgba(248, 113, 113, 0.25); }
 
     /* Today activity columns */
     .activity-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
     @media (max-width: 720px) { .activity-columns { grid-template-columns: 1fr; } }
-    .activity-col { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
-    .activity-col h3 { font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    .activity-col { padding: 18px; }
+    .activity-col h3 { font-size: 0.7rem; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.09em; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+    .activity-col h3::before { content: ""; width: 4px; height: 13px; border-radius: 2px; background: var(--grad); }
     .activity-col .empty { color: var(--muted); font-size: 0.85rem; }
     .cardio-item { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
     .cardio-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
@@ -62,41 +135,61 @@
     .strength-activity { margin-bottom: 16px; }
     .strength-activity:last-child { margin-bottom: 0; }
     .strength-activity .act-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; }
-    .set-row { display: grid; grid-template-columns: 2fr 80px 90px; gap: 8px; align-items: center; font-size: 0.82rem; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .set-row { display: grid; grid-template-columns: 2fr 80px 90px; gap: 8px; align-items: center; font-size: 0.82rem; padding: 5px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
     .set-row:last-child { border-bottom: none; }
-    .set-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 3px 6px; border-radius: 4px; font-size: 0.78rem; width: 100%; }
-    .set-field { background: transparent; border: 1px solid transparent; color: var(--text); border-radius: 4px; padding: 2px 5px; font-size: 0.82rem; width: 100%; text-align: right; transition: border-color 0.15s; }
-    .set-field:hover, .set-field:focus { border-color: var(--border); background: var(--bg); outline: none; }
+    .set-row select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 7px; font-size: 0.78rem; width: 100%; transition: border-color 0.15s; }
+    .set-row select:hover { border-color: var(--border-strong); }
+    .set-field { background: transparent; border: 1px solid transparent; color: var(--text); border-radius: 7px; padding: 3px 6px; font-size: 0.82rem; width: 100%; text-align: right; transition: border-color 0.15s, background 0.15s; font-variant-numeric: tabular-nums; }
+    .set-field:hover, .set-field:focus { border-color: var(--border-strong); background: var(--bg); outline: none; }
     .set-field.saving { border-color: var(--accent); }
     .set-field.saved { border-color: var(--excellent); }
-    .day-group { margin-bottom: 16px; }
+    .day-group { margin-bottom: 18px; }
     .day-group:last-child { margin-bottom: 0; }
-    .day-label { font-size: 0.72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+    .day-label { font-size: 0.7rem; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
 
     /* Charts */
-    .chart-section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
-    .chart-section h2 { font-size: 0.9rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+    .chart-section { padding: 20px 22px; margin-bottom: 16px; }
+    .chart-section h2 { font-size: 0.8rem; font-weight: 650; color: var(--text); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 18px; display: flex; align-items: center; gap: 9px; }
+    .chart-section h2::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--grad); flex: none; }
     .chart-controls { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-    .chart-controls select { background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; }
+    .chart-controls select, select {
+      background-color: var(--surface);
+      border: 1px solid var(--border); color: var(--text);
+      padding: 7px 30px 7px 12px; border-radius: 9px; font-size: 0.84rem;
+      appearance: none; -webkit-appearance: none;
+      background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%238b94a9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>');
+      background-repeat: no-repeat; background-position: right 9px center; background-size: 13px;
+      cursor: pointer; transition: border-color 0.15s;
+    }
+    .chart-controls select:hover, select:hover { border-color: var(--border-strong); }
     canvas { max-height: 260px; }
 
-    /* Activities table */
+    /* Tables */
     table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th { text-align: left; padding: 8px 12px; color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
-    td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
-    tr:hover td { background: rgba(255,255,255,0.02); }
-    .sport-pill { display: inline-block; padding: 2px 8px; border-radius: 4px; background: rgba(99,102,241,0.15); color: var(--accent); font-size: 0.75rem; }
+    th { text-align: left; padding: 8px 12px; color: var(--muted); font-weight: 600; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; border-bottom: 1px solid var(--border-strong); }
+    td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+    tbody tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255, 255, 255, 0.025); }
+    .sport-pill { display: inline-block; padding: 2px 10px; border-radius: 999px; background: rgba(129, 140, 248, 0.12); color: var(--accent); font-size: 0.74rem; font-weight: 500; border: 1px solid rgba(129, 140, 248, 0.2); }
+
+    /* Chart info tooltip */
+    .chart-info { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--muted); font-size: 0.68rem; font-weight: 700; cursor: default; flex: none; }
+    .chart-info:hover { color: var(--text); border-color: var(--accent); }
+    .chart-info .chart-tooltip { display: none; position: absolute; left: 26px; top: -8px; width: 330px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 12px; padding: 15px 17px; font-size: 0.8rem; color: var(--text); line-height: 1.65; z-index: 100; font-weight: 400; text-transform: none; letter-spacing: 0; pointer-events: none; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5); }
+    .chart-info:hover .chart-tooltip, .chart-info:focus .chart-tooltip { display: block; }
 
     /* Tabs */
     .tab-content { display: none; }
-    .tab-content.active { display: block; }
+    .tab-content.active { display: block; animation: fadeUp 0.28s ease; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
     #loading { color: var(--muted); font-size: 0.85rem; padding: 20px 0; }
   </style>
 </head>
 <body>
   <header>
+    <span class="brand-mark" aria-hidden="true"></span>
     <h1>Recovery Bot</h1>
-    <span>{{ user_name }}</span>
+    <span class="user-chip">{{ user_name }}</span>
     <nav>
       <button class="active" onclick="showTab('today', this)">Today</button>
       <button onclick="showTab('trends', this)">Trends</button>
@@ -123,6 +216,21 @@
           <option value="90">90 days</option>
         </select>
       </div>
+      <div class="chart-section">
+        <h2>Sleep Stress Recovery <span class="chart-info" tabindex="0">?<span class="chart-tooltip">
+          <strong>Sleep Stress Recovery</strong><br><br>
+          Garmin records stress every ~3 min overnight. This chart splits your sleep window in half and measures how much stress dropped from the first half to the second — the healthy recovery signature.<br><br>
+          <strong>Bar = Recovery %</strong> — how far stress fell from the first half avg to the second (e.g. 30% means stress dropped by 30%). Higher is better.<br><br>
+          <strong>Line = Time below 20</strong> — minutes in the second half where stress was under 20 (blue/calm zone). More is better.<br><br>
+          <strong>Colors:</strong><br>
+          🟡 Amber — workout the evening before (click to open activity)<br>
+          🟢 Green — ≥15% recovery drop<br>
+          🔵 Indigo — 0–15% drop<br>
+          🔴 Red — stress rose in second half<br>
+          ▪ Grey — first-half stress too low to be meaningful (&lt;12 avg)
+        </span></span></h2>
+        <canvas id="chart-stress-recovery"></canvas>
+      </div>
       <div class="chart-section"><h2>HRV (RMSSD) + Training Load</h2><canvas id="chart-hrv"></canvas></div>
       <div class="chart-section"><h2>Sleep</h2><canvas id="chart-sleep"></canvas></div>
       <div class="chart-section"><h2>Resting Heart Rate</h2><canvas id="chart-rhr"></canvas></div>
@@ -144,7 +252,7 @@
       <div class="chart-section">
         <table>
           <thead>
-            <tr><th>Date</th><th>Score</th><th>Duration</th><th>Deep</th><th>REM</th><th>Avg Stress</th><th>Body Battery</th></tr>
+            <tr><th>Date</th><th>Score</th><th>Duration</th><th>Deep</th><th>REM</th><th>Avg Stress</th><th>1st Half</th><th>2nd Half</th><th>Recovery %</th><th>Below 20</th><th>Body Battery</th></tr>
           </thead>
           <tbody id="sleep-body"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
@@ -221,6 +329,13 @@
 
 <script>
 const chartInstances = {};
+Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+Chart.defaults.color = '#8b94a9';
+Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(26,30,44,0.95)';
+Chart.defaults.plugins.tooltip.borderColor = 'rgba(148,163,184,0.28)';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 10;
+Chart.defaults.plugins.tooltip.cornerRadius = 8;
 
 function showTab(name, btn) {
   document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -262,6 +377,10 @@ async function loadToday() {
     { label: 'Sleep Score', value: m.sleep_score != null ? `${m.sleep_score}` : '—', sub: m.sleep_duration_hours ? `${m.sleep_duration_hours}h` : '' },
     { label: 'Overnight Stress', value: m.overnight_stress != null ? `${m.overnight_stress.toFixed(0)}` : '—', sub: m.overnight_stress_qualifier || '' },
     { label: 'Body Battery', value: m.body_battery_start != null ? `${m.body_battery_start}` : '—', sub: 'at wake' },
+    { label: 'Stress 1st Half', value: m.stress_first_half_avg != null ? `${m.stress_first_half_avg}` : '—', sub: 'sleep start → mid' },
+    { label: 'Stress 2nd Half', value: m.stress_second_half_avg != null ? `${m.stress_second_half_avg}` : '—', sub: `min ${m.stress_second_half_min ?? '—'}` },
+    { label: 'Stress Recovery', value: m.stress_recovery_delta != null ? `${m.stress_recovery_delta > 0 ? '+' : ''}${m.stress_recovery_delta}` : '—', sub: m.stress_recovery_pct != null ? `${m.stress_recovery_pct}% drop` : '' },
+    { label: 'Time Below 20', value: m.stress_time_below_20_min != null ? `${m.stress_time_below_20_min}m` : '—', sub: '2nd half' },
   ];
 
   // All known categories for dropdowns (union of today + all-time)
@@ -390,6 +509,7 @@ async function loadTrends() {
   renderSleepChart(trend);
   renderRHRChart(trend);
   renderStressChart(trend);
+  renderStressRecoveryChart(trend);
 }
 
 function mkChart(id, config) {
@@ -494,6 +614,116 @@ function renderStressChart(trend) {
   });
 }
 
+function renderStressRecoveryChart(trend) {
+  const workouts = trend.pre_sleep_workouts || [];
+  const threshold = 12;
+  const firstHalf = trend.stress_first_half_avg || trend.labels.map(() => null);
+
+  // Use recovery % (delta/first_half) as bar value; grey out nights where first half < threshold
+  const recoveryPct = trend.stress_recovery_delta.map((delta, i) => {
+    const fh = firstHalf[i];
+    if (delta == null || fh == null || fh < threshold) return null;
+    return Math.round(delta / fh * 100);
+  });
+
+  const barColors = recoveryPct.map((v, i) => {
+    if (v == null) return 'rgba(148,163,184,0.25)'; // greyed out — low-stress night
+    if (workouts[i] && workouts[i].length > 0) return 'rgba(245,158,11,0.85)'; // post-workout amber
+    return v >= 15 ? 'rgba(34,197,94,0.7)' : v >= 0 ? 'rgba(99,102,241,0.7)' : 'rgba(239,68,68,0.7)';
+  });
+
+  const barData = trend.stress_recovery_delta.map((delta, i) => {
+    const fh = firstHalf[i];
+    if (delta == null || fh == null) return null;
+    if (fh < threshold) return 1; // tiny stub so greyed bar is visible
+    return Math.round(delta / fh * 100);
+  });
+
+  // Align zeros on dual axes
+  const pctVals = barData.filter(v => v != null && v > 1); // exclude stubs
+  const minVals = trend.stress_time_below_20_min.filter(v => v != null);
+  const pctMin = Math.min(0, ...(pctVals.length ? pctVals : [0]));
+  const pctMax = Math.max(10, ...(pctVals.length ? pctVals : [10]));
+  const minMax = Math.max(1, ...(minVals.length ? minVals : [1]));
+  const zeroFrac = pctMin < 0 ? Math.abs(pctMin) / (pctMax - pctMin) : 0;
+  const y2Min = zeroFrac > 0 ? -Math.ceil(minMax * zeroFrac / (1 - zeroFrac)) : 0;
+
+  mkChart('chart-stress-recovery', {
+    type: 'bar',
+    data: {
+      labels: trend.labels,
+      datasets: [
+        {
+          label: 'Time below 20 (min, right axis)',
+          data: trend.stress_time_below_20_min,
+          type: 'line',
+          borderColor: 'rgba(99,102,241,0.9)',
+          backgroundColor: 'rgba(99,102,241,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 2,
+          order: 1,
+          yAxisID: 'y2',
+        },
+        {
+          label: 'Recovery % (1st→2nd half drop, left axis)',
+          data: barData,
+          backgroundColor: barColors,
+          order: 2,
+          yAxisID: 'y',
+        },
+      ],
+    },
+    options: {
+      ...baseOpts,
+      onClick(e, elements) {
+        if (!elements.length) return;
+        const el = elements.find(el => el.datasetIndex === 1);
+        if (!el) return;
+        const ws = workouts[el.index];
+        if (!ws || !ws.length) return;
+        const w = ws[0];
+        if (w.source === 'strava') window.location.href = `/activity/${w.id}`;
+      },
+      plugins: {
+        ...baseOpts.plugins,
+        tooltip: {
+          callbacks: {
+            title: (items) => trend.labels[items[0].dataIndex],
+            label: (item) => {
+              const i = item.dataIndex;
+              const fh = firstHalf[i];
+              const delta = trend.stress_recovery_delta[i];
+              const pct = recoveryPct[i];
+              const below20 = trend.stress_time_below_20_min[i];
+              const ws = workouts[i] || [];
+
+              const lines = [];
+              if (ws.length) {
+                lines.push('Workout: ' + ws.map(w => w.name).join(', '));
+              }
+              if (fh != null && fh < threshold) {
+                lines.push(`Low-stress night (1st half avg: ${fh} — no signal)`);
+              } else if (fh != null && delta != null) {
+                lines.push(`1st half avg: ${fh}  →  2nd half avg: ${Math.round(fh - delta)}`);
+                lines.push(`Recovery: ${pct}% drop${pct >= 15 ? ' ✓' : ''}`);
+              }
+              if (below20 != null) lines.push(`Time below 20: ${below20} min`);
+              return lines;
+            },
+          },
+        },
+      },
+      scales: {
+        ...baseOpts.scales,
+        y: { ...baseOpts.scales.y, min: pctMin, max: pctMax * 1.15, title: { display: true, text: 'Recovery %', color: '#94a3b8' } },
+        y2: { position: 'right', min: y2Min, max: minMax * 1.15, ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { drawOnChartArea: false },
+              title: { display: true, text: 'Min < 20', color: '#94a3b8' } },
+      },
+    },
+  });
+}
+
 // ── Sleep ─────────────────────────────────────────────────────────────────
 function sleepRowColor(r, sleepMinH, stressLow, stressHigh) {
   // badSleep: 0 = perfect, 1 = well below minimum
@@ -547,6 +777,9 @@ async function loadSleep() {
     { label: 'Avg Body Battery', value: av.body_battery ?? '—', sub: 'at wake' },
     { label: 'Avg Deep Sleep', value: av.deep_min ? `${av.deep_min}m` : '—', sub: '' },
     { label: 'Avg REM Sleep', value: av.rem_min ? `${av.rem_min}m` : '—', sub: '' },
+    { label: 'Stress 1st Half', value: av.stress_first_half_avg ?? '—', sub: 'avg' },
+    { label: 'Stress 2nd Half', value: av.stress_second_half_avg ?? '—', sub: 'avg' },
+    { label: 'Time Below 20', value: av.stress_time_below_20_min ? `${av.stress_time_below_20_min}m` : '—', sub: '2nd half avg' },
   ];
   document.getElementById('sleep-averages').innerHTML = avCards.map(c => `
     <div class="metric-card">
@@ -606,21 +839,30 @@ async function loadSleep() {
   // Table
   const tbody = document.getElementById('sleep-body');
   if (!d.data.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">No data.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="color:var(--muted)">No data.</td></tr>';
     return;
   }
   const { sleep_min_hours, stress_low, stress_high } = d.thresholds;
 
   tbody.innerHTML = d.data.map(r => {
     const rowBg = sleepRowColor(r, sleep_min_hours, stress_low, stress_high);
+    const recPct = (r.stress_recovery_delta != null && r.stress_first_half_avg > 0)
+      ? Math.round(r.stress_recovery_delta / r.stress_first_half_avg * 100) + '%'
+      : '—';
+    const recColor = r.stress_first_half_avg < 12 ? 'var(--muted)'
+      : r.stress_recovery_delta > 0 ? 'var(--excellent)' : 'var(--poor)';
     return `
-    <tr style="background:${rowBg}">
+    <tr style="background:${rowBg};cursor:pointer" onclick="window.location.href='/sleep/${r.date}'" title="View night detail">
       <td>${r.date}</td>
       <td>${r.sleep_score ?? '—'}</td>
       <td>${r.duration_hours ? `${r.duration_hours}h` : '—'}</td>
       <td>${r.deep_min ? `${r.deep_min}m` : '—'}</td>
       <td>${r.rem_min ? `${r.rem_min}m` : '—'}</td>
       <td>${r.overnight_stress ?? '—'}</td>
+      <td style="color:var(--muted)">${r.stress_first_half_avg ?? '—'}</td>
+      <td style="color:var(--muted)">${r.stress_second_half_avg ?? '—'}</td>
+      <td style="color:${recColor}">${recPct}</td>
+      <td style="color:var(--muted)">${r.stress_time_below_20_min != null ? r.stress_time_below_20_min + 'm' : '—'}</td>
       <td>${r.body_battery ?? '—'}</td>
     </tr>`;
   }).join('');

@@ -13,6 +13,11 @@ client_secret = ""
 # Run `recovery auth strava` to authenticate (opens browser)
 # Token stored in ~/.recovery-bot/strava_token.json
 
+[trendweight]
+# Your TrendWeight share URL — find it under Settings > Share on trendweight.com
+# e.g. https://trendweight.com/u/<your-id>
+share_url = ""
+
 [sync]
 sync_time = "08:00"
 backfill_days = 730

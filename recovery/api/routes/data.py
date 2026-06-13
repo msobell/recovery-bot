@@ -40,6 +40,13 @@ def today_status():
                 "overnight_stress_qualifier": snapshot.overnight_stress_qualifier,
                 "body_battery_start": snapshot.body_battery_start,
                 "steps": snapshot.steps,
+                "stress_first_half_avg": snapshot.stress_first_half_avg,
+                "stress_second_half_avg": snapshot.stress_second_half_avg,
+                "stress_second_half_min": snapshot.stress_second_half_min,
+                "stress_recovery_delta": snapshot.stress_recovery_delta,
+                "stress_time_below_20_min": snapshot.stress_time_below_20_min,
+                "stress_recovery_pct": round(snapshot.stress_recovery_delta / snapshot.stress_first_half_avg * 100, 1)
+                    if snapshot.stress_recovery_delta and snapshot.stress_first_half_avg else None,
             }
         return {
             "date": str(day),
@@ -66,6 +73,7 @@ _EXTRA_CATEGORIES = {
     "ONE_ARM_KETTLEBELL_SWING",
     "LEG_BAND_REHAB",
     "DB_PRESS_EACH_ARM",
+    "CABLE_ROW",
 }
 
 
@@ -246,10 +254,15 @@ def sleep(days: int = Query(default=30, ge=7, le=365)):
                 "overnight_stress": round(r.overnight_stress_avg, 1) if r.overnight_stress_avg else None,
                 "body_battery": r.body_battery_start,
                 "steps": r.steps,
+                "stress_first_half_avg": round(r.stress_first_half_avg, 1) if r.stress_first_half_avg else None,
+                "stress_second_half_avg": round(r.stress_second_half_avg, 1) if r.stress_second_half_avg else None,
+                "stress_second_half_min": r.stress_second_half_min,
+                "stress_recovery_delta": round(r.stress_recovery_delta, 1) if r.stress_recovery_delta else None,
+                "stress_time_below_20_min": r.stress_time_below_20_min,
             })
 
         valid = [d for d in data if d["sleep_score"] is not None]
-        avg = lambda key: round(sum(d[key] for d in valid if d[key]) / max(sum(1 for d in valid if d[key]), 1), 1)
+        avg = lambda key: round(sum(d[key] for d in data if d.get(key)) / max(sum(1 for d in data if d.get(key)), 1), 1)
 
         from recovery import config as cfg_mod
         cfg = cfg_mod.get()
@@ -267,8 +280,129 @@ def sleep(days: int = Query(default=30, ge=7, le=365)):
                 "body_battery": avg("body_battery"),
                 "deep_min": avg("deep_min"),
                 "rem_min": avg("rem_min"),
+                "stress_first_half_avg": avg("stress_first_half_avg"),
+                "stress_second_half_avg": avg("stress_second_half_avg"),
+                "stress_time_below_20_min": avg("stress_time_below_20_min"),
             },
             "data": data,
+        }
+    finally:
+        session.close()
+
+
+@router.get("/sleep/{night_date}")
+def sleep_night(night_date: str):
+    """Detail for one night of sleep (the night ending on the morning of night_date)."""
+    try:
+        d = date.fromisoformat(night_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date, expected YYYY-MM-DD")
+
+    session = _session()
+    try:
+        row = session.get(GarminDaily, d)
+        if not row:
+            raise HTTPException(status_code=404, detail="No data for that night")
+
+        # 30-day window averages for comparison
+        win_start = d - timedelta(days=30)
+        win = session.execute(
+            select(GarminDaily).where(GarminDaily.date >= win_start, GarminDaily.date < d)
+        ).scalars().all()
+
+        def _avg(field, digits=1):
+            vals = [getattr(r, field) for r in win if getattr(r, field) is not None]
+            return round(sum(vals) / len(vals), digits) if vals else None
+
+        averages = {
+            "sleep_score": _avg("sleep_score", 0),
+            "sleep_duration_min": _avg("sleep_duration_min", 0),
+            "sleep_deep_min": _avg("sleep_deep_min", 0),
+            "sleep_rem_min": _avg("sleep_rem_min", 0),
+            "overnight_stress_avg": _avg("overnight_stress_avg"),
+            "stress_first_half_avg": _avg("stress_first_half_avg"),
+            "stress_second_half_avg": _avg("stress_second_half_avg"),
+            "stress_time_below_20_min": _avg("stress_time_below_20_min", 0),
+            "body_battery_start": _avg("body_battery_start", 0),
+            "hrv_rmssd": _avg("hrv_rmssd", 0),
+            "resting_hr": _avg("resting_hr", 0),
+        }
+
+        # Workouts the previous day (what this night was recovering from)
+        prev = d - timedelta(days=1)
+        workouts = []
+        for a in session.execute(select(StravaActivity).where(StravaActivity.date == prev)).scalars():
+            workouts.append({
+                "id": a.strava_id, "source": "strava", "name": a.name or a.sport_type,
+                "sport_type": a.sport_type,
+                "duration_min": round(a.duration_sec / 60) if a.duration_sec else None,
+                "suffer_score": a.suffer_score,
+            })
+        for a in session.execute(select(GarminActivity).where(GarminActivity.date == prev)).scalars():
+            workouts.append({
+                "id": a.garmin_id, "source": "garmin", "name": a.name or "Strength",
+                "sport_type": a.sport_type,
+                "duration_min": round(a.duration_sec / 60) if a.duration_sec else None,
+                "suffer_score": None,
+            })
+
+        # Live stress curve from Garmin (best effort — page degrades gracefully without it)
+        curve = []
+        try:
+            from recovery.ingest import garmin as garmin_ingest
+            api = garmin_ingest.load_session()
+            ds = d.strftime("%Y-%m-%d")
+            daily = (api.get_sleep_data(ds) or {}).get("dailySleepDTO", {})
+            start_gmt = daily.get("sleepStartTimestampGMT")
+            end_gmt = daily.get("sleepEndTimestampGMT")
+            start_local = daily.get("sleepStartTimestampLocal")
+            if start_gmt and end_gmt and start_local:
+                tz_offset_ms = start_local - start_gmt
+                readings = []
+                for cd in (prev, d):
+                    try:
+                        readings += (api.get_stress_data(cd.strftime("%Y-%m-%d")) or {}).get("stressValuesArray", [])
+                    except Exception:
+                        pass
+                from datetime import datetime, timezone
+                for ts, v in sorted(set(map(tuple, readings))):
+                    if start_gmt <= ts <= end_gmt and v >= 0:
+                        local_dt = datetime.fromtimestamp((ts + tz_offset_ms) / 1000, tz=timezone.utc)
+                        curve.append({"t": local_dt.strftime("%H:%M"), "v": v})
+        except Exception:
+            curve = []
+
+        recovery_pct = (
+            round(row.stress_recovery_delta / row.stress_first_half_avg * 100, 1)
+            if row.stress_recovery_delta is not None and row.stress_first_half_avg
+            else None
+        )
+
+        return {
+            "date": str(d),
+            "sleep_start": row.sleep_start.isoformat() if row.sleep_start else None,
+            "sleep_end": row.sleep_end.isoformat() if row.sleep_end else None,
+            "sleep_score": row.sleep_score,
+            "sleep_duration_min": row.sleep_duration_min,
+            "sleep_deep_min": row.sleep_deep_min,
+            "sleep_rem_min": row.sleep_rem_min,
+            "sleep_light_min": row.sleep_light_min,
+            "sleep_awake_min": row.sleep_awake_min,
+            "overnight_stress_avg": row.overnight_stress_avg,
+            "overnight_stress_qualifier": row.overnight_stress_qualifier,
+            "stress_first_half_avg": row.stress_first_half_avg,
+            "stress_second_half_avg": row.stress_second_half_avg,
+            "stress_second_half_min": row.stress_second_half_min,
+            "stress_recovery_delta": row.stress_recovery_delta,
+            "stress_recovery_pct": recovery_pct,
+            "stress_time_below_20_min": row.stress_time_below_20_min,
+            "body_battery_start": row.body_battery_start,
+            "hrv_rmssd": row.hrv_rmssd,
+            "hrv_status": row.hrv_status,
+            "resting_hr": row.resting_hr,
+            "averages_30d": averages,
+            "pre_sleep_workouts": workouts,
+            "stress_curve": curve,
         }
     finally:
         session.close()
@@ -279,7 +413,35 @@ def trend(days: int = Query(default=30, ge=7, le=365)):
     session = _session()
     try:
         snapshots = get_trend(session, days=days)
+
+        # For each snapshot date D, look up workouts on D-1 (the evening before that sleep night).
+        # Include both Strava and Garmin strength activities.
+        dates = [s.date for s in snapshots]
+        prev_dates = [d - timedelta(days=1) for d in dates]
+        strava_rows = session.execute(
+            select(StravaActivity)
+            .where(StravaActivity.date.in_(prev_dates))
+        ).scalars().all()
+        garmin_rows = session.execute(
+            select(GarminActivity)
+            .where(GarminActivity.date.in_(prev_dates))
+        ).scalars().all()
+
+        # Map previous-day date → list of workout dicts
+        workouts: dict[date, list] = {}
+        for a in strava_rows:
+            workouts.setdefault(a.date, []).append({
+                "id": a.strava_id, "name": a.name or a.sport_type, "source": "strava"
+            })
+        for a in garmin_rows:
+            workouts.setdefault(a.date, []).append({
+                "id": a.garmin_id, "name": a.name or "Strength", "source": "garmin"
+            })
+
+        from recovery import config as cfg_mod
+        cfg = cfg_mod.get()
         return {
+            "stress_low_threshold": cfg.recovery.overnight_stress_low,
             "labels": [str(s.date) for s in snapshots],
             "hrv": [s.hrv_rmssd for s in snapshots],
             "hrv_baseline_low": [s.hrv_baseline_low for s in snapshots],
@@ -289,6 +451,11 @@ def trend(days: int = Query(default=30, ge=7, le=365)):
             "sleep_hours": [round(s.sleep_duration_min / 60, 1) if s.sleep_duration_min else None for s in snapshots],
             "overnight_stress": [s.overnight_stress_avg for s in snapshots],
             "steps": [s.steps for s in snapshots],
+            "stress_first_half_avg": [s.stress_first_half_avg for s in snapshots],
+            "stress_recovery_delta": [s.stress_recovery_delta for s in snapshots],
+            "stress_time_below_20_min": [s.stress_time_below_20_min for s in snapshots],
+            # workouts[i] = list of workouts on the day before snapshots[i] (the pre-sleep evening)
+            "pre_sleep_workouts": [workouts.get(d - timedelta(days=1), []) for d in dates],
         }
     finally:
         session.close()

@@ -32,6 +32,13 @@ class GarminDaily(Base):
     overnight_stress_avg: Mapped[float | None] = mapped_column(Float)
     overnight_stress_qualifier: Mapped[str | None] = mapped_column(String(64))
 
+    # Stress time-series derived metrics (sleep window only)
+    stress_first_half_avg: Mapped[float | None] = mapped_column(Float)
+    stress_second_half_avg: Mapped[float | None] = mapped_column(Float)
+    stress_second_half_min: Mapped[int | None] = mapped_column(Integer)
+    stress_recovery_delta: Mapped[float | None] = mapped_column(Float)
+    stress_time_below_20_min: Mapped[int | None] = mapped_column(Integer)
+
     # Body battery
     body_battery_start: Mapped[int | None] = mapped_column(Integer)
 

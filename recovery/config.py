@@ -73,6 +73,11 @@ class RecoveryConfig:
 
 
 @dataclass
+class TrendWeightConfig:
+    share_url: str = ""
+
+
+@dataclass
 class UIConfig:
     port: int = 8080
     default_trend_days: int = 30
@@ -83,6 +88,7 @@ class Config:
     user: UserConfig = field(default_factory=UserConfig)
     garmin: GarminConfig = field(default_factory=GarminConfig)
     strava: StravaConfig = field(default_factory=StravaConfig)
+    trendweight: TrendWeightConfig = field(default_factory=TrendWeightConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     equipment: EquipmentConfig = field(default_factory=EquipmentConfig)
     recovery: RecoveryConfig = field(default_factory=RecoveryConfig)
@@ -107,6 +113,9 @@ def load(path: Path | None = None) -> Config:
 
     if s := raw.get("strava"):
         cfg.strava = StravaConfig(**{k: v for k, v in s.items() if hasattr(StravaConfig, k)})
+
+    if tw := raw.get("trendweight"):
+        cfg.trendweight = TrendWeightConfig(**{k: v for k, v in tw.items() if hasattr(TrendWeightConfig, k)})
 
     if s := raw.get("sync"):
         cfg.sync = SyncConfig(**{k: v for k, v in s.items() if hasattr(SyncConfig, k)})

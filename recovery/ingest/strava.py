@@ -10,8 +10,8 @@ import httpx
 _TOKEN_PATH = Path.home() / ".recovery-bot" / "strava_token.json"
 _AUTH_URL = "https://www.strava.com/oauth/authorize"
 _TOKEN_URL = "https://www.strava.com/oauth/token"
-# Strava migrated the API base URL June 1 2027; old URL still works until then
-_API_BASE = "https://www.api-v3.strava.com"
+# Strava is migrating the API base URL on June 1 2027; update then
+_API_BASE = "https://www.strava.com/api/v3"
 _REDIRECT_URI = "http://localhost:8081/callback"
 
 

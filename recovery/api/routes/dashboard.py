@@ -28,3 +28,13 @@ def activity_page(request: Request, strava_id: int):
         name="activity.html",
         context={"user_name": cfg.user.name, "strava_id": strava_id},
     )
+
+
+@router.get("/sleep/{night_date}", response_class=HTMLResponse)
+def sleep_night_page(request: Request, night_date: str):
+    cfg = cfg_mod.get()
+    return templates.TemplateResponse(
+        request=request,
+        name="sleep_night.html",
+        context={"user_name": cfg.user.name, "night_date": night_date},
+    )

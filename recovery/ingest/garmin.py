@@ -101,6 +101,67 @@ def fetch_body_battery(api: Garmin, day: date) -> dict:
         return {}
 
 
+def fetch_stress_detail(api: Garmin, day: date, sleep_start: datetime | None, sleep_end: datetime | None) -> dict:
+    """Derive sleep-window stress metrics from the full-day stress time-series.
+
+    Fetches GMT sleep timestamps directly from the sleep API to avoid timezone
+    issues with the stored naive local datetimes. Falls back to the passed-in
+    sleep_start/sleep_end only if the GMT fields are absent.
+    """
+    if not sleep_start or not sleep_end:
+        return {}
+    ds = day.strftime("%Y-%m-%d")
+    try:
+        # Use GMT timestamps from sleep API — the stress array uses the same epoch
+        sleep_data = api.get_sleep_data(ds) or {}
+        daily = sleep_data.get("dailySleepDTO", {})
+        start_gmt_ms = daily.get("sleepStartTimestampGMT")
+        end_gmt_ms = daily.get("sleepEndTimestampGMT")
+        if start_gmt_ms and end_gmt_ms:
+            sleep_start_ms = start_gmt_ms
+            sleep_end_ms = end_gmt_ms
+        else:
+            sleep_start_ms = sleep_start.timestamp() * 1000
+            sleep_end_ms = sleep_end.timestamp() * 1000
+
+        data = api.get_stress_data(ds) or {}
+        readings = data.get("stressValuesArray", [])
+        if not readings:
+            return {}
+
+        # Filter to sleep window, excluding rest (-1/−2) sentinel values
+        window = [
+            v for ts, v in readings
+            if sleep_start_ms <= ts <= sleep_end_ms and v >= 0
+        ]
+        if not window:
+            return {}
+
+        midpoint_idx = len(window) // 2
+        first_half = window[:midpoint_idx]
+        second_half = window[midpoint_idx:]
+
+        if not first_half or not second_half:
+            return {}
+
+        first_avg = sum(first_half) / len(first_half)
+        second_avg = sum(second_half) / len(second_half)
+        # Each reading is ~3 minutes apart
+        minutes_per_reading = (sleep_end - sleep_start).total_seconds() / 60 / len(window)
+
+        return {
+            "stress_first_half_avg": round(first_avg, 1),
+            "stress_second_half_avg": round(second_avg, 1),
+            "stress_second_half_min": min(second_half),
+            "stress_recovery_delta": round(first_avg - second_avg, 1),
+            "stress_time_below_20_min": round(
+                sum(1 for v in second_half if v < 20) * minutes_per_reading
+            ),
+        }
+    except Exception:
+        return {}
+
+
 def fetch_steps(api: Garmin, day: date) -> dict:
     ds = day.strftime("%Y-%m-%d")
     try:
@@ -203,5 +264,6 @@ def fetch_day(day: date, api: Garmin | None = None, delay: float = 0.0) -> dict:
     result.update(fetch_overnight_stress(api, day))
     result.update(fetch_body_battery(api, day))
     result.update(fetch_steps(api, day))
+    result.update(fetch_stress_detail(api, day, result.get("sleep_start"), result.get("sleep_end")))
     return result
 

@@ -101,6 +101,20 @@ def _upsert_strava(session: Session, data: dict) -> bool:
     return True
 
 
+def _upsert_weight(session: Session, data: dict) -> bool:
+    from recovery.db.models import WeightEntry
+    from datetime import datetime as dt
+    existing = session.get(WeightEntry, data["date"])
+    if existing:
+        for k, v in data.items():
+            if k != "date" and v is not None:
+                setattr(existing, k, v)
+        existing.imported_at = dt.now()
+    else:
+        session.add(WeightEntry(**data, imported_at=dt.now()))
+    return True
+
+
 def _log_sync(session: Session, source: str, date_from: date, date_to: date, rows: int, error: str | None = None):
     session.add(SyncLog(
         started_at=datetime.now(),

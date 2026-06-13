@@ -44,6 +44,11 @@ class DailySnapshot:
     overnight_stress_qualifier: str | None
     body_battery_start: int | None
     steps: int | None
+    stress_first_half_avg: float | None
+    stress_second_half_avg: float | None
+    stress_second_half_min: int | None
+    stress_recovery_delta: float | None
+    stress_time_below_20_min: int | None
 
 
 @dataclass
@@ -74,6 +79,11 @@ def get_snapshot(session: Session, day: date) -> DailySnapshot | None:
         overnight_stress_qualifier=row.overnight_stress_qualifier,
         body_battery_start=row.body_battery_start,
         steps=row.steps,
+        stress_first_half_avg=row.stress_first_half_avg,
+        stress_second_half_avg=row.stress_second_half_avg,
+        stress_second_half_min=row.stress_second_half_min,
+        stress_recovery_delta=row.stress_recovery_delta,
+        stress_time_below_20_min=row.stress_time_below_20_min,
     )
 
 
@@ -101,6 +111,11 @@ def get_trend(session: Session, days: int = 14) -> list[DailySnapshot]:
             overnight_stress_qualifier=r.overnight_stress_qualifier,
             body_battery_start=r.body_battery_start,
             steps=r.steps,
+            stress_first_half_avg=r.stress_first_half_avg,
+            stress_second_half_avg=r.stress_second_half_avg,
+            stress_second_half_min=r.stress_second_half_min,
+            stress_recovery_delta=r.stress_recovery_delta,
+            stress_time_below_20_min=r.stress_time_below_20_min,
         )
         for r in rows
     ]

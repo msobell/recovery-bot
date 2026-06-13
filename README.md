@@ -104,7 +104,8 @@ The MCP server exposes these tools to Claude Desktop:
 | `get_training_load` | Acute vs chronic load, sport breakdown |
 | `recommend_workout` | Recovery-aware workout recommendation with equipment constraints |
 | `query_date_range` | Query any metric (hrv, sleep, rhr, stress, steps, activities) over a custom date range |
-| `sync_missing_days` | Fetch any missing days from Garmin and refresh yesterday + today |
+| `sync_missing_days` | Background sync from Garmin/Strava/TrendWeight — defaults to last 1 day; `days=N` or `all_missing=True` for more |
+| `get_sync_status` | Check progress/result of a background sync |
 | `save_memory` | Persist a note (preference, observation, injury) across sessions |
 | `query_memory` | Hybrid keyword + semantic search over saved notes |
 | `get_related_entities` | Walk the knowledge graph for a concept or entity |

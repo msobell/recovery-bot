@@ -1,5 +1,6 @@
 """CLI entry point: `recovery <command>`"""
 import click
+from datetime import date
 from rich.console import Console
 
 console = Console()
@@ -114,6 +115,103 @@ def sync():
     """Run the daily sync (yesterday's Garmin + new Strava activities)."""
     from recovery.ingest.sync import daily_sync
     daily_sync()
+
+
+@cli.command("sync-missing")
+@click.option("--days", default=None, type=int, help="Only look back N days (default: full history).")
+def sync_missing(days):
+    """Fill gaps in the database and refresh recent data.
+
+    Scans for missing Garmin daily records (HRV, sleep, RHR, stress, steps)
+    and strength activities, fetches any new Strava activities, and pulls the
+    latest weight data from TrendWeight. Always re-syncs yesterday and today
+    since Garmin finalises overnight data late.
+
+    Examples:
+
+      recovery sync-missing           # full history scan\n
+      recovery sync-missing --days 7  # only look back 7 days
+    """
+    from recovery.db.session import get_session, init_db
+    from recovery.db.models import GarminDaily, StravaActivity
+    from recovery.ingest import garmin, strava
+    from recovery.ingest.sync import _upsert_garmin, _upsert_strength, _upsert_strava, _upsert_weight
+    from recovery.ingest.trendweight import fetch_measurements
+    from recovery import config as cfg_mod
+    from sqlalchemy import select, func
+    from datetime import timedelta
+
+    cfg = cfg_mod.get()
+    session = get_session(init_db())
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
+    try:
+        earliest = session.execute(select(func.min(GarminDaily.date))).scalar()
+        if not earliest:
+            console.print("[red]No existing data found. Run `recovery backfill` first.[/red]")
+            return
+
+        if days:
+            # --days forces a re-sync of the entire window, not just gaps
+            scan_from = today - timedelta(days=days)
+            to_sync = sorted(scan_from + timedelta(n) for n in range((today - scan_from).days + 1))
+            console.print(f"[bold]Garmin:[/bold] re-syncing {len(to_sync)} day(s) from {scan_from}")
+        else:
+            scan_from = earliest
+            existing = set(session.execute(select(GarminDaily.date)).scalars().all())
+            missing = [
+                scan_from + timedelta(n)
+                for n in range((yesterday - scan_from).days + 1)
+                if (scan_from + timedelta(n)) not in existing
+            ]
+            to_sync = sorted(set(missing) | {yesterday, today})
+            console.print(f"[bold]Garmin:[/bold] {len(missing)} missing day(s) + refreshing yesterday/today")
+        api = garmin.load_session()
+        garmin_ok = garmin_err = 0
+        for d in to_sync:
+            try:
+                data = garmin.fetch_day(d, api=api, delay=1.1)
+                _upsert_garmin(session, data)
+                session.commit()
+                acts = garmin.fetch_strength_activities(api, d)
+                for act in acts:
+                    _upsert_strength(session, act)
+                session.commit()
+                garmin_ok += 1
+            except Exception as e:
+                session.rollback()
+                console.print(f"  [yellow]  {d}: {e}[/yellow]")
+                garmin_err += 1
+        console.print(f"  [green]Done. {garmin_ok} day(s) synced" + (f", {garmin_err} error(s).[/green]" if garmin_err else ".[/green]"))
+
+        console.print("[bold]Strava:[/bold] fetching new activities...")
+        try:
+            last_strava = session.execute(select(func.max(StravaActivity.date))).scalar()
+            strava_after = (last_strava + timedelta(days=1)) if last_strava else scan_from
+            activities = strava.fetch_activities(cfg.strava.client_id, cfg.strava.client_secret, after=strava_after)
+            for act in activities:
+                _upsert_strava(session, act)
+            session.commit()
+            console.print(f"  [green]Done. {len(activities)} activity(s) synced.[/green]")
+        except Exception as e:
+            session.rollback()
+            console.print(f"  [yellow]Strava failed: {e}[/yellow]")
+
+        if cfg.trendweight.share_url:
+            console.print("[bold]TrendWeight:[/bold] fetching weight data...")
+            try:
+                measurements = fetch_measurements(cfg.trendweight.share_url)
+                for m in measurements:
+                    _upsert_weight(session, m)
+                session.commit()
+                console.print(f"  [green]Done. {len(measurements)} entry(s) synced.[/green]")
+            except Exception as e:
+                session.rollback()
+                console.print(f"  [yellow]TrendWeight failed: {e}[/yellow]")
+
+    finally:
+        session.close()
 
 
 @cli.command()

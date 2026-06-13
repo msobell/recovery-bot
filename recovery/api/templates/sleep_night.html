@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sleep — Recovery Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0c13;
+      --surface: #12151f;
+      --surface-2: #1a1e2c;
+      --border: rgba(148, 163, 184, 0.13);
+      --border-strong: rgba(148, 163, 184, 0.28);
+      --text: #e9edf5;
+      --muted: #8b94a9;
+      --excellent: #34d399;
+      --moderate: #fbbf24;
+      --poor: #f87171;
+      --accent: #818cf8;
+      --accent-2: #22d3ee;
+      --grad: linear-gradient(135deg, #6366f1 0%, #22d3ee 100%);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      background-image:
+        radial-gradient(1100px 520px at 85% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+        radial-gradient(900px 480px at -10% 110%, rgba(34, 211, 238, 0.06), transparent 60%);
+      background-attachment: fixed;
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px; -webkit-font-smoothing: antialiased; min-height: 100vh;
+    }
+    header {
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(10, 12, 19, 0.78);
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 32px; display: flex; align-items: center; gap: 12px;
+    }
+    header a { color: var(--muted); text-decoration: none; font-size: 0.88rem; font-weight: 500; }
+    header a:hover { color: var(--text); }
+    .user-chip { color: var(--muted); font-size: 0.8rem; font-weight: 500; border: 1px solid var(--border); border-radius: 999px; padding: 3px 12px; background: var(--surface); margin-left: auto; }
+    main { padding: 28px 32px 48px; max-width: 980px; margin: 0 auto; }
+    @media (max-width: 720px) { main { padding: 20px 16px 40px; } header { padding: 12px 16px; } }
+
+    .night-header { margin-bottom: 26px; }
+    .night-header .night-pill { display: inline-block; padding: 3px 12px; border-radius: 999px; background: rgba(129, 140, 248, 0.12); color: var(--accent); font-size: 0.76rem; font-weight: 500; border: 1px solid rgba(129, 140, 248, 0.2); margin-bottom: 10px; }
+    .night-header h1 { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 6px; }
+    .night-header .meta { color: var(--muted); font-size: 0.88rem; }
+    .workout-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .workout-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px; border-radius: 999px; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.28); color: var(--moderate); font-size: 0.82rem; font-weight: 500; text-decoration: none; transition: border-color 0.15s; }
+    .workout-chip:hover { border-color: var(--moderate); }
+    .workout-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .stat-card, .section {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 55%), var(--surface);
+      border: 1px solid var(--border); border-radius: 14px;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+    }
+    .stat-card { padding: 15px 17px; }
+    .stat-card .label { font-size: 0.68rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 9px; }
+    .stat-card .value { font-size: 1.7rem; font-weight: 700; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+    .stat-card .sub { font-size: 0.76rem; color: var(--muted); margin-top: 6px; }
+    .stat-card .sub .up { color: var(--excellent); }
+    .stat-card .sub .down { color: var(--poor); }
+
+    .section { padding: 20px 22px; margin-bottom: 16px; }
+    .section h2 { font-size: 0.8rem; font-weight: 650; color: var(--text); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 18px; display: flex; align-items: center; gap: 9px; }
+    .section h2::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--grad); flex: none; }
+    .chart-wrap { position: relative; height: 280px; }
+    .chart-wrap.short { height: 96px; }
+    .fallback-note { color: var(--muted); font-size: 0.85rem; padding: 12px 0; }
+
+    #loading { color: var(--muted); padding: 40px 0; font-size: 0.9rem; }
+    #error { color: var(--poor); padding: 40px 0; font-size: 0.9rem; display: none; }
+  </style>
+</head>
+<body>
+<header>
+  <a href="/">← Dashboard</a>
+  <span class="user-chip">{{ user_name }}</span>
+</header>
+<main>
+  <div id="loading">Loading night…</div>
+  <div id="error"></div>
+  <div id="content" style="display:none"></div>
+</main>
+
+<script>
+const NIGHT_DATE = "{{ night_date }}";
+Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+Chart.defaults.color = '#8b94a9';
+Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(26,30,44,0.95)';
+Chart.defaults.plugins.tooltip.borderColor = 'rgba(148,163,184,0.28)';
+Chart.defaults.plugins.tooltip.borderWidth = 1;
+Chart.defaults.plugins.tooltip.padding = 10;
+Chart.defaults.plugins.tooltip.cornerRadius = 8;
+
+const gridColor = 'rgba(255,255,255,0.06)';
+
+function fmtClock(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+function fmtDay(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+function fmtDur(min) {
+  if (min == null) return '—';
+  return `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}m`;
+}
+// Comparison sub-line vs the 30-day average. higherIsBetter flips the arrow color.
+function cmp(value, avg, higherIsBetter, unit = '') {
+  if (value == null || avg == null) return '';
+  const diff = value - avg;
+  if (Math.abs(diff) < 0.05 * Math.abs(avg || 1)) return `≈ 30d avg (${avg}${unit})`;
+  const better = higherIsBetter ? diff > 0 : diff < 0;
+  const arrow = diff > 0 ? '▲' : '▼';
+  return `<span class="${better ? 'up' : 'down'}">${arrow}</span> 30d avg ${avg}${unit}`;
+}
+
+async function load() {
+  let n;
+  try {
+    const r = await fetch(`/api/sleep/${NIGHT_DATE}`);
+    if (!r.ok) throw new Error(r.status === 404 ? 'No data for that night' : `Error ${r.status}`);
+    n = await r.json();
+  } catch (e) {
+    document.getElementById('loading').style.display = 'none';
+    const err = document.getElementById('error');
+    err.textContent = `Failed to load: ${e.message || e}`;
+    err.style.display = 'block';
+    return;
+  }
+
+  const av = n.averages_30d || {};
+  document.title = `Sleep ${n.date} — Recovery Bot`;
+
+  const nightLabel = n.sleep_start && n.sleep_end
+    ? `${fmtDay(n.sleep_start)} → ${fmtDay(n.sleep_end)}`
+    : `Night ending ${n.date}`;
+
+  const workoutsHTML = (n.pre_sleep_workouts || []).length
+    ? `<div class="workout-chips">${n.pre_sleep_workouts.map(w => {
+        const inner = `<span class="dot"></span>${w.name}${w.duration_min ? ` · ${w.duration_min} min` : ''}${w.suffer_score ? ` · effort ${w.suffer_score}` : ''}`;
+        return w.source === 'strava'
+          ? `<a class="workout-chip" href="/activity/${w.id}">${inner} →</a>`
+          : `<span class="workout-chip">${inner}</span>`;
+      }).join('')}</div>`
+    : '';
+
+  const stats = [
+    { label: 'Sleep Score', value: n.sleep_score ?? '—', sub: cmp(n.sleep_score, av.sleep_score, true) },
+    { label: 'Duration', value: fmtDur(n.sleep_duration_min), sub: cmp(n.sleep_duration_min, av.sleep_duration_min, true, 'm') },
+    { label: 'Deep', value: n.sleep_deep_min != null ? `${n.sleep_deep_min}m` : '—', sub: cmp(n.sleep_deep_min, av.sleep_deep_min, true, 'm') },
+    { label: 'REM', value: n.sleep_rem_min != null ? `${n.sleep_rem_min}m` : '—', sub: cmp(n.sleep_rem_min, av.sleep_rem_min, true, 'm') },
+    { label: 'Avg Stress', value: n.overnight_stress_avg != null ? Math.round(n.overnight_stress_avg) : '—', sub: cmp(n.overnight_stress_avg, av.overnight_stress_avg, false) },
+    { label: 'Body Battery', value: n.body_battery_start ?? '—', sub: cmp(n.body_battery_start, av.body_battery_start, true) },
+    { label: 'HRV (morning)', value: n.hrv_rmssd != null ? `${Math.round(n.hrv_rmssd)}ms` : '—', sub: n.hrv_status || cmp(n.hrv_rmssd, av.hrv_rmssd, true, 'ms') },
+    { label: 'Resting HR', value: n.resting_hr != null ? `${n.resting_hr}` : '—', sub: cmp(n.resting_hr, av.resting_hr, false, ' bpm') },
+  ];
+
+  const recovery = [
+    { label: '1st Half Stress', value: n.stress_first_half_avg ?? '—', sub: cmp(n.stress_first_half_avg, av.stress_first_half_avg, false) },
+    { label: '2nd Half Stress', value: n.stress_second_half_avg ?? '—', sub: cmp(n.stress_second_half_avg, av.stress_second_half_avg, false) },
+    { label: 'Recovery', value: n.stress_recovery_pct != null ? `${n.stress_recovery_pct}%` : '—', sub: n.stress_recovery_delta != null ? `drop of ${n.stress_recovery_delta} pts` : '' },
+    { label: '2nd Half Min', value: n.stress_second_half_min ?? '—', sub: 'lowest reading' },
+    { label: 'Time Below 20', value: n.stress_time_below_20_min != null ? `${n.stress_time_below_20_min}m` : '—', sub: cmp(n.stress_time_below_20_min, av.stress_time_below_20_min, true, 'm') },
+  ];
+
+  const card = s => `
+    <div class="stat-card">
+      <div class="label">${s.label}</div>
+      <div class="value">${s.value}</div>
+      ${s.sub ? `<div class="sub">${s.sub}</div>` : ''}
+    </div>`;
+
+  const hasCurve = (n.stress_curve || []).length > 0;
+
+  document.getElementById('content').innerHTML = `
+    <div class="night-header">
+      <div class="night-pill">Night of Sleep</div>
+      <h1>${nightLabel}</h1>
+      <div class="meta">${fmtClock(n.sleep_start)} → ${fmtClock(n.sleep_end)} · ${fmtDur(n.sleep_duration_min)}${n.overnight_stress_qualifier ? ' · stress: ' + n.overnight_stress_qualifier.replace(/_/g, ' ') : ''}</div>
+      ${workoutsHTML}
+    </div>
+    <div class="stats-grid">${stats.map(card).join('')}</div>
+    <div class="section">
+      <h2>Stress Recovery</h2>
+      <div class="stats-grid" style="margin-bottom:0">${recovery.map(card).join('')}</div>
+    </div>
+    <div class="section">
+      <h2>Overnight Stress Curve</h2>
+      ${hasCurve
+        ? '<div class="chart-wrap"><canvas id="chart-curve"></canvas></div>'
+        : '<div class="fallback-note">Live stress curve unavailable (Garmin not reachable right now). The derived metrics above are from the last sync.</div>'}
+    </div>
+    <div class="section">
+      <h2>Sleep Stages</h2>
+      <div class="chart-wrap short"><canvas id="chart-stages"></canvas></div>
+    </div>
+  `;
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  if (hasCurve) renderCurve(n);
+  renderStages(n);
+}
+
+function renderCurve(n) {
+  const pts = n.stress_curve;
+  const labels = pts.map(p => p.t);
+  const mid = Math.floor(pts.length / 2);
+  const firstHalf = pts.map((p, i) => i <= mid ? p.v : null);
+  const secondHalf = pts.map((p, i) => i >= mid ? p.v : null);
+
+  new Chart(document.getElementById('chart-curve'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '1st half',
+          data: firstHalf,
+          borderColor: '#818cf8',
+          backgroundColor: 'rgba(129,140,248,0.12)',
+          fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2,
+        },
+        {
+          label: '2nd half',
+          data: secondHalf,
+          borderColor: '#34d399',
+          backgroundColor: 'rgba(52,211,153,0.1)',
+          fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2,
+        },
+        {
+          label: 'Calm threshold (20)',
+          data: pts.map(() => 20),
+          borderColor: 'rgba(148,163,184,0.45)',
+          borderDash: [5, 5], pointRadius: 0, borderWidth: 1, fill: false,
+        },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, font: { size: 11 } }, grid: { color: gridColor } },
+        y: { min: 0, ticks: { font: { size: 11 } }, grid: { color: gridColor }, title: { display: true, text: 'Stress', color: '#8b94a9' } },
+      },
+    },
+  });
+}
+
+function renderStages(n) {
+  const stages = [
+    { label: 'Deep', v: n.sleep_deep_min, color: '#6366f1' },
+    { label: 'REM', v: n.sleep_rem_min, color: '#22d3ee' },
+    { label: 'Light', v: n.sleep_light_min, color: '#818cf8' },
+    { label: 'Awake', v: n.sleep_awake_min, color: 'rgba(248,113,113,0.75)' },
+  ].filter(s => s.v != null);
+
+  new Chart(document.getElementById('chart-stages'), {
+    type: 'bar',
+    data: {
+      labels: [''],
+      datasets: stages.map(s => ({
+        label: `${s.label} (${fmtDur(s.v)})`,
+        data: [s.v],
+        backgroundColor: s.color,
+        borderRadius: 4,
+        barThickness: 26,
+      })),
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { font: { size: 11 } } } },
+      scales: {
+        x: { stacked: true, ticks: { font: { size: 11 }, callback: v => `${Math.round(v / 60)}h` }, grid: { color: gridColor } },
+        y: { stacked: true, display: false },
+      },
+    },
+  });
+}
+
+load();
+</script>
+</body>
+</html>

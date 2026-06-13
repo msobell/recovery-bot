@@ -59,6 +59,13 @@ def get_today_status() -> dict:
                 "overnight_stress_qualifier": snapshot.overnight_stress_qualifier,
                 "body_battery_on_wake": snapshot.body_battery_start,
                 "steps": snapshot.steps,
+                "stress_first_half_avg": snapshot.stress_first_half_avg,
+                "stress_second_half_avg": snapshot.stress_second_half_avg,
+                "stress_second_half_min": snapshot.stress_second_half_min,
+                "stress_recovery_delta": snapshot.stress_recovery_delta,
+                "stress_recovery_pct": round(snapshot.stress_recovery_delta / snapshot.stress_first_half_avg * 100, 1)
+                    if snapshot.stress_recovery_delta and snapshot.stress_first_half_avg else None,
+                "stress_time_below_20_min": snapshot.stress_time_below_20_min,
             }
 
         return result
@@ -88,6 +95,9 @@ def get_recovery_trend(days: int = 14) -> dict:
                 "sleep_duration_hours": round(s.sleep_duration_min / 60, 1) if s.sleep_duration_min else None,
                 "overnight_stress": s.overnight_stress_avg,
                 "steps": s.steps,
+                "stress_recovery_delta": s.stress_recovery_delta,
+                "stress_recovery_pct": round(s.stress_recovery_delta / s.stress_first_half_avg * 100, 1)
+                    if s.stress_recovery_delta and s.stress_first_half_avg else None,
             })
 
         hrv_vals = [s.hrv_rmssd for s in snapshots if s.hrv_rmssd]
@@ -249,7 +259,15 @@ def query_date_range(metric: str, start_date: str, end_date: str) -> dict:
             "hrv": lambda r: {"hrv_rmssd": r.hrv_rmssd, "hrv_status": r.hrv_status},
             "sleep": lambda r: {"sleep_score": r.sleep_score, "sleep_duration_hours": round(r.sleep_duration_min / 60, 1) if r.sleep_duration_min else None},
             "rhr": lambda r: {"resting_hr": r.resting_hr},
-            "stress": lambda r: {"overnight_stress_avg": r.overnight_stress_avg, "qualifier": r.overnight_stress_qualifier},
+            "stress": lambda r: {
+                "overnight_stress_avg": r.overnight_stress_avg,
+                "qualifier": r.overnight_stress_qualifier,
+                "stress_first_half_avg": r.stress_first_half_avg,
+                "stress_second_half_avg": r.stress_second_half_avg,
+                "stress_second_half_min": r.stress_second_half_min,
+                "stress_recovery_delta": r.stress_recovery_delta,
+                "stress_time_below_20_min": r.stress_time_below_20_min,
+            },
             "steps": lambda r: {"steps": r.steps},
         }
 
@@ -595,78 +613,67 @@ def _sport_breakdown(rows) -> dict:
     return breakdown
 
 
-@mcp.tool()
-def sync_missing_days() -> dict:
-    """
-    Find all dates that are missing from the local database and sync them from Garmin
-    and Strava. Covers daily metrics (HRV, sleep, RHR, stress, body battery, steps),
-    strength activities, and Strava cardio. Looks back from today to the earliest date
-    already in the DB, filling any gaps. Also syncs yesterday and today if not yet present.
-    Call this when the user wants to catch up on missing data or run a manual sync.
-    """
+# Background sync state — written by the worker thread, read by get_sync_status
+_sync_state: dict = {"status": "idle"}
+
+
+def _run_sync_missing(days: int | None) -> None:
+    """Worker for sync_missing_days. days=None means full-history gap scan."""
+    from datetime import datetime
     from sqlalchemy import select, func
     from recovery.db.models import GarminDaily, StravaActivity
     from recovery.ingest import garmin, strava
-    from recovery.ingest.sync import _upsert_garmin, _upsert_strength, _upsert_strava
+    from recovery.ingest.sync import _upsert_garmin, _upsert_strength, _upsert_strava, _upsert_weight
+    from recovery.ingest.trendweight import fetch_measurements
     from recovery import config as cfg_mod
 
     session = _session()
+    errors: list[str] = []
+    garmin_synced = strava_synced = weight_synced = 0
     try:
-        earliest = session.execute(select(func.min(GarminDaily.date))).scalar()
-        if not earliest:
-            return {"error": "No existing data found. Run a full backfill first."}
-
-        existing = set(session.execute(select(GarminDaily.date)).scalars().all())
-
         today = date.today()
         yesterday = today - timedelta(days=1)
+        earliest = session.execute(select(func.min(GarminDaily.date))).scalar()
 
-        all_dates = []
-        current = earliest
-        while current <= yesterday:
-            if current not in existing:
-                all_dates.append(current)
-            current += timedelta(days=1)
+        if days is not None:
+            # Re-sync the whole window unconditionally
+            start = today - timedelta(days=days)
+            to_sync = [start + timedelta(n) for n in range((today - start).days + 1)]
+        else:
+            # Full-history gap scan + always refresh yesterday and today
+            if not earliest:
+                _sync_state.update(status="error", error="No existing data found. Run a full backfill first.")
+                return
+            existing = set(session.execute(select(GarminDaily.date)).scalars().all())
+            missing = [
+                earliest + timedelta(n)
+                for n in range((yesterday - earliest).days + 1)
+                if (earliest + timedelta(n)) not in existing
+            ]
+            to_sync = sorted(set(missing) | {yesterday, today})
 
-        # Always re-sync yesterday and today (data finalises overnight)
-        for d in [yesterday, today]:
-            if d not in all_dates:
-                all_dates.append(d)
-
-        all_dates.sort()
         api = garmin.load_session()
-
-        garmin_synced = 0
-        errors = []
-        for d in all_dates:
+        for i, d in enumerate(to_sync, 1):
+            _sync_state["progress"] = f"Garmin day {i}/{len(to_sync)} ({d})"
             try:
                 data = garmin.fetch_day(d, api=api, delay=1.1)
                 _upsert_garmin(session, data)
+                session.commit()
+                for act in garmin.fetch_strength_activities(api, d):
+                    _upsert_strength(session, act)
                 session.commit()
                 garmin_synced += 1
             except Exception as e:
                 session.rollback()
                 errors.append(f"{d} garmin: {e}")
 
-            try:
-                acts = garmin.fetch_strength_activities(api, d)
-                for act in acts:
-                    _upsert_strength(session, act)
-                session.commit()
-            except Exception as e:
-                session.rollback()
-                errors.append(f"{d} strength: {e}")
+        cfg = cfg_mod.get()
 
-        # Strava: fetch everything since the last date in the DB
-        strava_synced = 0
+        _sync_state["progress"] = "Strava"
         try:
-            cfg = cfg_mod.get()
             last_strava = session.execute(select(func.max(StravaActivity.date))).scalar()
-            strava_after = (last_strava + timedelta(days=1)) if last_strava else earliest
-            activities = strava.fetch_activities(
-                cfg.strava.client_id, cfg.strava.client_secret, after=strava_after
-            )
-            for act in activities:
+            strava_after = (last_strava + timedelta(days=1)) if last_strava else (earliest or yesterday)
+            for act in strava.fetch_activities(cfg.strava.client_id, cfg.strava.client_secret, after=strava_after):
                 if _upsert_strava(session, act):
                     strava_synced += 1
             session.commit()
@@ -674,15 +681,84 @@ def sync_missing_days() -> dict:
             session.rollback()
             errors.append(f"strava: {e}")
 
-        return {
-            "dates_checked": (yesterday - earliest).days + 1,
-            "garmin_days_refreshed": garmin_synced,
-            "strava_activities_synced": strava_synced,
-            "errors": errors if errors else None,
-            "message": f"Garmin: {garmin_synced} day(s), Strava: {strava_synced} activity(s)." + (f" {len(errors)} error(s)." if errors else ""),
-        }
+        _sync_state["progress"] = "TrendWeight"
+        try:
+            if cfg.trendweight.share_url:
+                for m in fetch_measurements(cfg.trendweight.share_url):
+                    if _upsert_weight(session, m):
+                        weight_synced += 1
+                session.commit()
+        except Exception as e:
+            session.rollback()
+            errors.append(f"trendweight: {e}")
+
+        _sync_state.update(
+            status="done",
+            progress="complete",
+            finished_at=datetime.now().isoformat(timespec="seconds"),
+            result={
+                "garmin_days_refreshed": garmin_synced,
+                "strava_activities_synced": strava_synced,
+                "weight_entries_synced": weight_synced,
+                "errors": errors if errors else None,
+                "message": f"Garmin: {garmin_synced} day(s), Strava: {strava_synced} activity(s), Weight: {weight_synced} entry(s)."
+                           + (f" {len(errors)} error(s)." if errors else ""),
+            },
+        )
+    except Exception as e:
+        _sync_state.update(status="error", error=str(e))
     finally:
         session.close()
+
+
+@mcp.tool()
+def sync_missing_days(days: int = 1, all_missing: bool = False) -> dict:
+    """
+    Start a sync of Garmin daily metrics (HRV, sleep, RHR, stress, body battery, steps),
+    strength activities, new Strava activities, and TrendWeight data.
+
+    Runs in the background and returns immediately — call get_sync_status() to check
+    progress and get the final result. Each Garmin day takes ~10s due to rate limits.
+
+    days: how many days back to re-sync (default 1, i.e. yesterday + today).
+          User says "fetch the last 5 days" -> days=5.
+    all_missing: scan the entire history and fill every gap, ignoring `days`.
+          User says "fetch all missing data" -> all_missing=True.
+    """
+    import threading
+    from datetime import datetime
+
+    if _sync_state.get("status") == "running":
+        return {
+            "status": "already_running",
+            "progress": _sync_state.get("progress"),
+            "message": "A sync is already in progress. Call get_sync_status() to monitor it.",
+        }
+
+    effective_days = None if all_missing else max(1, days)
+    _sync_state.clear()
+    _sync_state.update(
+        status="running",
+        progress="starting",
+        started_at=datetime.now().isoformat(timespec="seconds"),
+        scope="all missing days" if all_missing else f"last {effective_days} day(s)",
+    )
+    threading.Thread(target=_run_sync_missing, args=(effective_days,), daemon=True).start()
+
+    return {
+        "status": "started",
+        "scope": _sync_state["scope"],
+        "message": "Sync started in the background. Call get_sync_status() to check progress.",
+    }
+
+
+@mcp.tool()
+def get_sync_status() -> dict:
+    """
+    Check the status of a background sync started by sync_missing_days.
+    Returns status (idle/running/done/error), progress, and the final result when done.
+    """
+    return dict(_sync_state)
 
 
 def run_mcp():
