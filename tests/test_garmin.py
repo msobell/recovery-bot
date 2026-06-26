@@ -28,9 +28,8 @@ def patch_token_dir(tmp_path, monkeypatch):
 def test_fetch_hrv_parses_response(mock_api):
     mock_api.get_hrv_data.return_value = {"hrvSummary": {
         "status": "BALANCED",
-        "lastNight": 55.3,
-        "baselineLowUpper": 48.0,
-        "baselineBalancedUpper": 62.0,
+        "lastNightAvg": 55.3,
+        "baseline": {"lowUpper": 48.0, "balancedUpper": 62.0},
     }}
     result = garmin.fetch_hrv(mock_api, date(2024, 1, 1))
     assert result["hrv_status"] == "BALANCED"
@@ -98,9 +97,12 @@ def test_fetch_rhr_returns_empty_on_error(mock_api):
 # ── fetch_overnight_stress ────────────────────────────────────────────────
 
 def test_fetch_overnight_stress_parses_response(mock_api):
-    mock_api.get_stress_data.return_value = {
-        "avgStressLevel": 22.5,
-        "stressQualifier": "restful",
+    # Overnight stress is the sleep-window average, read from the sleep DTO.
+    mock_api.get_sleep_data.return_value = {
+        "dailySleepDTO": {
+            "avgSleepStress": 22.5,
+            "sleepScores": {"stress": {"qualifierKey": "restful"}},
+        }
     }
     result = garmin.fetch_overnight_stress(mock_api, date(2024, 1, 1))
     assert result["overnight_stress_avg"] == 22.5
@@ -108,7 +110,7 @@ def test_fetch_overnight_stress_parses_response(mock_api):
 
 
 def test_fetch_overnight_stress_returns_empty_on_error(mock_api):
-    mock_api.get_stress_data.side_effect = Exception("error")
+    mock_api.get_sleep_data.side_effect = Exception("error")
     assert garmin.fetch_overnight_stress(mock_api, date(2024, 1, 1)) == {}
 
 

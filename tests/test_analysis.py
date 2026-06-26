@@ -27,9 +27,17 @@ def _snap(**kwargs) -> DailySnapshot:
         resting_hr=48,
         sleep_score=80,
         sleep_duration_min=480,
+        sleep_deep_min=90,
+        sleep_rem_min=120,
         overnight_stress_avg=20.0,
         overnight_stress_qualifier="restful",
         body_battery_start=85,
+        steps=8000,
+        stress_first_half_avg=None,
+        stress_second_half_avg=None,
+        stress_second_half_min=None,
+        stress_recovery_delta=None,
+        stress_time_below_20_min=None,
     )
     defaults.update(kwargs)
     return DailySnapshot(**defaults)
