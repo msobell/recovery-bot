@@ -68,8 +68,32 @@ recovery/
   api/          # FastAPI app + routes (dashboard, data)
   analysis/     # Recovery scoring logic
   db/           # ORM models, session, memory models
-  ingest/       # Garmin + Strava sync
+  ingest/       # Garmin + Strava sync; pdf.py (PDF extract/chunk/OCR)
+  knowledge/    # Document corpus: session + ingest/list/delete/search (knowledge.db)
   mcp/          # MCP server + memory tools
   memory/       # Embedding, search, and virtual-table setup
 config.toml     # User config (timezone, equipment, thresholds)
 ```
+
+## Document Knowledge Base (separate DB)
+
+PDFs uploaded via the dashboard **Documents** tab are chunked, embedded, and
+indexed into a **second SQLite database**, `~/.recovery-bot/knowledge.db`, kept
+fully separate from personal memory (`recovery.db`) so general reference text
+never conflates with hand-curated notes.
+
+- `knowledge.db` reuses the **same schema** as the memory DB (`Memory` /
+  `KnowledgeEdge` + `memories_fts` + `memories_vec`), so `ensure_virtual_tables`,
+  the ORM models, and `hybrid_search` all apply unchanged against it.
+- Engine selection is by path: `get_engine(db_path)` caches one engine per path
+  (`recovery/db/session.py`); `init_knowledge_db()` + `knowledge/session.py`
+  point at `knowledge.db`.
+- Separation is **physical, not a filter**: `query_memory`/`save_memory` →
+  `recovery.db`; `search_documents`/ingest → `knowledge.db`. A memory query can
+  never surface a PDF chunk and vice versa.
+- Corpus chunks carry `metadata_json` with `{source, doc_id, page, chunk_index}`
+  and are **not** entity-linked (no knowledge-graph edges). Delete a doc by
+  removing its rows from `memories_fts`, `memories_vec`, `memories` (matched by
+  `doc_id`). `rm ~/.recovery-bot/knowledge.db` rebuilds the corpus from scratch.
+- Scanned/image-only pages are OCR'd via Claude Haiku (`recovery/ingest/pdf.py`,
+  `ocr_page`); needs `ANTHROPIC_API_KEY`, lazy-imported, OCR path only.

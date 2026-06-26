@@ -84,6 +84,16 @@ class UIConfig:
 
 
 @dataclass
+class KnowledgeConfig:
+    # OCR for scanned/image-only PDF pages. Needs ANTHROPIC_API_KEY in the env;
+    # if the key is absent, scanned pages are skipped with a warning regardless
+    # of this flag. Text PDFs never use OCR and need no key.
+    ocr_enabled: bool = True
+    ocr_model: str = "claude-haiku-4-5"   # fast + cheap + accurate for OCR
+    max_pdf_mb: int = 25                   # reject uploads larger than this
+
+
+@dataclass
 class Config:
     user: UserConfig = field(default_factory=UserConfig)
     garmin: GarminConfig = field(default_factory=GarminConfig)
@@ -93,6 +103,7 @@ class Config:
     equipment: EquipmentConfig = field(default_factory=EquipmentConfig)
     recovery: RecoveryConfig = field(default_factory=RecoveryConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
 
 
 def load(path: Path | None = None) -> Config:
@@ -131,6 +142,9 @@ def load(path: Path | None = None) -> Config:
 
     if ui := raw.get("ui"):
         cfg.ui = UIConfig(**{k: v for k, v in ui.items() if hasattr(UIConfig, k)})
+
+    if k := raw.get("knowledge"):
+        cfg.knowledge = KnowledgeConfig(**{kk: vv for kk, vv in k.items() if hasattr(KnowledgeConfig, kk)})
 
     return cfg
 

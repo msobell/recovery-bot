@@ -43,6 +43,11 @@ def _upsert_strength(session: Session, activity: dict) -> bool:
         existing.duration_sec = activity.get("duration_sec") or existing.duration_sec
         existing.avg_hr = activity.get("avg_hr") or existing.avg_hr
         existing.synced_at = datetime.now()
+        # Hand-curated sessions are authoritative: refresh metadata above, but
+        # never touch the sets. (Per-set overrides alone weren't enough — a
+        # re-sync would wipe any non-overridden set on a curated day.)
+        if existing.manually_edited:
+            return True
         # Preserve user-set category overrides and manual reps/weight edits by set_index
         user_edits = {
             s.set_index: {

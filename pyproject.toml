@@ -22,6 +22,8 @@ dependencies = [
     "sqlite-vec>=0.1.0",
     "sentence-transformers>=3.0.0",
     "numpy>=1.26.0",
+    "pymupdf>=1.24.0",
+    "anthropic>=0.40.0",
 ]
 
 [project.scripts]

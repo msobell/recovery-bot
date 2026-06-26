@@ -106,6 +106,7 @@ The MCP server exposes these tools to Claude Desktop:
 | `query_date_range` | Query any metric (hrv, sleep, rhr, stress, steps, activities) over a custom date range |
 | `sync_missing_days` | Background sync from Garmin/Strava/TrendWeight — defaults to last 1 day; `days=N` or `all_missing=True` for more |
 | `get_sync_status` | Check progress/result of a background sync |
+| `search_documents` | Search the uploaded-PDF knowledge base for relevant passages, with source + page citations (separate from personal memory) |
 | `save_memory` | Persist a note (preference, observation, injury) across sessions |
 | `query_memory` | Hybrid keyword + semantic search over saved notes |
 | `get_related_entities` | Walk the knowledge graph for a concept or entity |
@@ -126,9 +127,16 @@ recovery schedule uninstall   # Remove launchd job
 recovery schedule status      # Check launchd job status
 ```
 
+## Knowledge base (PDF documents)
+
+The **Documents** tab lets you drag-and-drop PDFs — training plans, research papers, protocols — into a searchable knowledge base. Each PDF is chunked, embedded, and indexed (FTS5 + vector) so the recovery bot can pull relevant passages when reasoning, via the `search_documents` MCP tool (with source + page citations).
+
+- **Separate from personal memory.** The corpus lives in its own database, `~/.recovery-bot/knowledge.db`, so general reference text never mixes with your hand-curated notes. Delete that file to rebuild the corpus from scratch without touching personal memory.
+- **Scanned PDFs** (image-only, no text layer) are OCR'd page-by-page via Claude Haiku — set `ANTHROPIC_API_KEY` in your environment to enable it. Text-based PDFs need no key. Configure under `[knowledge]` in `config.toml` (`ocr_enabled`, `ocr_model`, `max_pdf_mb`).
+
 ## Data storage
 
-All data is stored locally in `~/.recovery-bot/recovery.db` (SQLite). Nothing leaves your machine.
+Personal data lives in `~/.recovery-bot/recovery.db`; the document corpus lives in `~/.recovery-bot/knowledge.db` (both SQLite). Nothing leaves your machine except OCR calls (only when ingesting scanned PDFs).
 
 ## Equipment config
 

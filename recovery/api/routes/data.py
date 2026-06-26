@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -74,6 +74,9 @@ _EXTRA_CATEGORIES = {
     "LEG_BAND_REHAB",
     "DB_PRESS_EACH_ARM",
     "CABLE_ROW",
+    "UP_AND_DOWN_BICEPS",
+    "TRICEPS_AMRAP",
+    "SINGLE_LEG_KB_DEADLIFT",
 }
 
 
@@ -161,6 +164,10 @@ def patch_set(set_id: int, body: SetUpdate):
             s.reps = body.reps
         if body.weight_lbs is not None:
             s.weight_g = body.weight_lbs / _G_TO_LBS
+        # Any manual edit locks the session so a future re-sync won't clobber it.
+        act = session.get(GarminActivity, s.garmin_activity_id)
+        if act:
+            act.manually_edited = 1
         session.commit()
         return {"ok": True}
     finally:
@@ -564,3 +571,47 @@ def training_load(days: int = Query(default=60, ge=14, le=365)):
         return {"labels": list(by_date.keys()), "suffer_score": list(by_date.values())}
     finally:
         session.close()
+
+
+# ── Document corpus (knowledge.db — separate from personal memory) ───────────
+
+@router.post("/documents")
+async def upload_document(file: UploadFile = File(...)):
+    """Ingest a PDF into the document knowledge base (knowledge.db)."""
+    from recovery.config import get as get_config
+    from recovery.knowledge.ingest import ingest_pdf
+
+    name = file.filename or "upload.pdf"
+    if not name.lower().endswith(".pdf") and file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    data = await file.read()
+    max_bytes = get_config().knowledge.max_pdf_mb * 1024 * 1024
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="Empty file.")
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"PDF exceeds {get_config().knowledge.max_pdf_mb} MB limit.")
+
+    try:
+        return ingest_pdf(name, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingest failed: {e}")
+
+
+@router.get("/documents")
+def get_documents():
+    """List documents in the knowledge base."""
+    from recovery.knowledge.ingest import list_documents
+    return {"documents": list_documents()}
+
+
+@router.delete("/documents/{doc_id}")
+def remove_document(doc_id: str):
+    """Delete a document and all its chunks from the knowledge base."""
+    from recovery.knowledge.ingest import delete_document
+    removed = delete_document(doc_id)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return {"deleted_chunks": removed}

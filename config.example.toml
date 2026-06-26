@@ -22,6 +22,14 @@ share_url = ""
 sync_time = "08:00"
 backfill_days = 730
 
+[knowledge]
+# Document knowledge base (PDFs uploaded via the Documents tab → knowledge.db).
+# OCR for scanned/image-only pages needs ANTHROPIC_API_KEY in the environment;
+# text PDFs need no key. If the key is absent, scanned pages are skipped.
+ocr_enabled = true
+ocr_model = "claude-haiku-4-5"
+max_pdf_mb = 25
+
 [equipment]
 sauna = false
 squat_rack = false

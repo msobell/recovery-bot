@@ -761,6 +761,41 @@ def get_sync_status() -> dict:
     return dict(_sync_state)
 
 
+@mcp.tool()
+def search_documents(query: str, n_results: int = 5) -> dict:
+    """
+    Search the document knowledge base (uploaded PDFs — training plans, research,
+    protocols) for passages relevant to a query. Returns the top matching chunks
+    with their source filename and page for citation.
+
+    This is the document corpus, kept SEPARATE from personal memory (use
+    query_memory for personal notes/observations). Use this for general reference
+    knowledge: e.g. "optimal deadlift form cues", "deload week protocol".
+
+    Keep n_results small (default 5) to protect context — each result is a focused
+    passage, not a whole document. Only raise it when a query genuinely needs
+    broader coverage.
+    """
+    from recovery.knowledge.ingest import search_corpus
+
+    results = search_corpus(query, n_results=n_results)
+    if not results:
+        return {"query": query, "count": 0, "results": [], "note": "No matching passages in the knowledge base."}
+    return {
+        "query": query,
+        "count": len(results),
+        "results": [
+            {
+                "content": r["content"],
+                "citation": f"{r['source']} (p.{r['page']})" if r.get("source") else None,
+                "source": r.get("source"),
+                "page": r.get("page"),
+            }
+            for r in results
+        ],
+    }
+
+
 def run_mcp():
     """Entry point for stdio MCP server (used by Claude Desktop)."""
     from recovery.db.session import init_db

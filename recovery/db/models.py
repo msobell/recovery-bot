@@ -76,6 +76,8 @@ class GarminActivity(Base):
     duration_sec: Mapped[int | None] = mapped_column(Integer)
     avg_hr: Mapped[float | None] = mapped_column(Float)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    # When true, this session has been hand-curated; sync must NOT touch its sets.
+    manually_edited: Mapped[bool | None] = mapped_column(Integer, default=0)
 
     sets: Mapped[list["GarminStrengthSet"]] = relationship(
         "GarminStrengthSet", back_populates="activity", cascade="all, delete-orphan"
