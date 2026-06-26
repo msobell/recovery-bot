@@ -53,6 +53,7 @@ class StravaActivity(Base):
 
     strava_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     date: Mapped[date] = mapped_column(Date, index=True)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime)
     name: Mapped[str | None] = mapped_column(Text)
     sport_type: Mapped[str | None] = mapped_column(String(64))
     duration_sec: Mapped[int | None] = mapped_column(Integer)

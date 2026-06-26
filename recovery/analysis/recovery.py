@@ -122,6 +122,7 @@ def get_trend(session: Session, days: int = 14) -> list[DailySnapshot]:
 
 
 def get_recent_activities(session: Session, days: int = 7) -> list[dict]:
+    from recovery.analysis.dedupe import strava_duplicate_ids
     end = date.today()
     start = end - timedelta(days=days)
     rows = session.execute(
@@ -129,6 +130,9 @@ def get_recent_activities(session: Session, days: int = 7) -> list[dict]:
         .where(StravaActivity.date >= start, StravaActivity.date <= end)
         .order_by(StravaActivity.date.desc())
     ).scalars().all()
+    # Exclude Strava rows that mirror a Garmin strength session (Garmin is
+    # authoritative for strength) so the same lift isn't counted twice.
+    dupes = strava_duplicate_ids(session)
     return [
         {
             "date": str(r.date),
@@ -140,6 +144,7 @@ def get_recent_activities(session: Session, days: int = 7) -> list[dict]:
             "suffer_score": r.suffer_score,
         }
         for r in rows
+        if r.strava_id not in dupes
     ]
 
 

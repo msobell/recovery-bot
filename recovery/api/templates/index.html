@@ -9,6 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
   <style>
     :root {
       --bg: #0a0c13;
@@ -198,6 +199,37 @@
     .doc-row .doc-del:hover { background: rgba(248,113,113,0.2); }
     .doc-badge { display: inline-block; font-size: 0.68rem; padding: 1px 7px; border-radius: 999px; background: rgba(251,191,36,0.14); color: var(--moderate); border: 1px solid rgba(251,191,36,0.28); margin-left: 6px; }
 
+    /* Coach */
+    .coach-input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 11px 13px; font-size: 0.9rem; resize: vertical; transition: border-color 0.15s; }
+    .coach-input:hover { border-color: var(--border-strong); }
+    .coach-input:focus { border-color: var(--accent); outline: none; }
+    .coach-buttons { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+    .coach-btn { background: var(--grad); color: #fff; border: none; border-radius: 10px; padding: 10px 20px; font-size: 0.88rem; font-weight: 600; cursor: pointer; box-shadow: 0 2px 10px rgba(99,102,241,0.4); transition: opacity 0.15s, transform 0.1s; }
+    .coach-btn:hover { opacity: 0.92; }
+    .coach-btn:active { transform: translateY(1px); }
+    .coach-btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+    .coach-result { margin-top: 18px; padding: 18px 22px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; font-size: 0.9rem; line-height: 1.65; min-height: 40px; }
+    .coach-result h1 { font-size: 1.15rem; font-weight: 700; margin: 4px 0 10px; text-transform: none; letter-spacing: 0; display: block; }
+    .coach-result h1::before { content: none; }
+    .coach-result h2, .coach-result h3 { font-size: 0.95rem; font-weight: 700; margin: 18px 0 8px; text-transform: none; letter-spacing: 0; color: var(--accent); display: block; }
+    .coach-result h2::before, .coach-result h3::before { content: none; }
+    .coach-result p { margin: 0 0 10px; }
+    .coach-result strong { color: var(--text); font-weight: 700; }
+    .coach-result ul, .coach-result ol { margin: 6px 0 12px; padding-left: 22px; }
+    .coach-result li { margin: 3px 0; }
+    .coach-result hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+    .coach-result blockquote { margin: 12px 0; padding: 8px 14px; border-left: 3px solid var(--accent); background: rgba(129,140,248,0.07); border-radius: 0 8px 8px 0; color: var(--text); }
+    .coach-result blockquote p { margin: 0; }
+    .coach-result table { width: auto; min-width: 60%; margin: 10px 0; border-collapse: collapse; }
+    .coach-result th, .coach-result td { border: 1px solid var(--border); padding: 6px 12px; text-align: left; font-size: 0.85rem; }
+    .coach-result th { background: var(--surface-2); font-weight: 650; color: var(--text); text-transform: none; letter-spacing: 0; }
+    .coach-result code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+    .coach-result .cursor { color: var(--accent); animation: blink 1s step-end infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .coach-save { background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.3); color: var(--excellent); border-radius: 9px; padding: 7px 16px; font-size: 0.84rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
+    .coach-save:hover { background: rgba(52,211,153,0.2); }
+    .coach-save:disabled { opacity: 0.5; cursor: default; }
+
     /* Tabs */
     .tab-content { display: none; }
     .tab-content.active { display: block; animation: fadeUp 0.28s ease; }
@@ -212,6 +244,7 @@
     <span class="user-chip">{{ user_name }}</span>
     <nav>
       <button class="active" onclick="showTab('today', this)">Today</button>
+      <button onclick="showTab('coach', this)">Coach</button>
       <button onclick="showTab('trends', this)">Trends</button>
       <button onclick="showTab('sleep', this)">Sleep</button>
       <button onclick="showTab('activities', this)">Activities</button>
@@ -225,6 +258,24 @@
     <!-- TODAY TAB -->
     <div id="today" class="tab-content active">
       <div id="today-status" style="color:var(--muted);padding:20px 0">Loading...</div>
+    </div>
+
+    <!-- COACH TAB -->
+    <div id="coach" class="tab-content">
+      <div class="chart-section">
+        <h2>Suggested Workout</h2>
+        <textarea id="coach-instructions" class="coach-input" rows="2"
+          placeholder="Optional: anything for today? e.g. 'really want a heavy day', 'feeling lazy', 'lifting with a friend — make it fun'"></textarea>
+        <div class="coach-buttons">
+          <button class="coach-btn" onclick="generateWorkout('cardio')">Generate Cardio</button>
+          <button class="coach-btn" onclick="generateWorkout('strength')">Generate Strength</button>
+        </div>
+        <div id="coach-result" class="coach-result" style="display:none"></div>
+        <div id="coach-actions" style="display:none;margin-top:14px">
+          <button class="coach-save" onclick="saveWorkout()">Save to memory</button>
+          <span id="coach-save-status" style="margin-left:12px;font-size:0.85rem;color:var(--muted)"></span>
+        </div>
+      </div>
     </div>
 
     <!-- TRENDS TAB -->
@@ -1151,6 +1202,76 @@ async function deleteDoc(docId, name) {
   if (!confirm(`Delete "${name}" from the knowledge base?`)) return;
   await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
   loadDocuments();
+}
+
+// ── Coach ──────────────────────────────────────────────────────────────────
+let _coachRaw = '';
+let _coachType = null;
+
+function coachMarkdown(t) {
+  // Full markdown via marked: headings, tables, blockquotes, hr, lists, bold.
+  return marked.parse(t, { breaks: true });
+}
+
+async function generateWorkout(type) {
+  _coachType = type;
+  _coachRaw = '';
+  const result = document.getElementById('coach-result');
+  const actions = document.getElementById('coach-actions');
+  const btns = document.querySelectorAll('.coach-btn');
+  const instructions = document.getElementById('coach-instructions').value;
+
+  actions.style.display = 'none';
+  document.getElementById('coach-save-status').textContent = '';
+  result.style.display = 'block';
+  result.innerHTML = '<span class="cursor">▍</span>';
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    const r = await fetch('/api/generate-workout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, instructions }),
+    });
+    if (!r.ok) throw new Error(r.status);
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      _coachRaw += decoder.decode(value, { stream: true });
+      result.innerHTML = coachMarkdown(_coachRaw) + '<span class="cursor">▍</span>';
+      result.scrollTop = result.scrollHeight;
+    }
+    result.innerHTML = coachMarkdown(_coachRaw);
+    if (_coachRaw.trim()) actions.style.display = 'block';
+  } catch (e) {
+    result.innerHTML = `<span style="color:var(--poor)">Generation failed: ${e}</span>`;
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+async function saveWorkout() {
+  const btn = document.querySelector('.coach-save');
+  const status = document.getElementById('coach-save-status');
+  btn.disabled = true;
+  status.textContent = 'Saving…';
+  try {
+    await fetch('/api/generate-workout/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: _coachType,
+        instructions: document.getElementById('coach-instructions').value,
+        workout: _coachRaw,
+      }),
+    });
+    status.textContent = 'Saved to memory ✓';
+  } catch (e) {
+    status.textContent = `Save failed: ${e}`;
+    btn.disabled = false;
+  }
 }
 
 // Init

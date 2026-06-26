@@ -94,6 +94,13 @@ class KnowledgeConfig:
 
 
 @dataclass
+class CoachConfig:
+    # Workout generation (Coach tab) calls the Claude API server-side. Needs
+    # ANTHROPIC_API_KEY in the env (same key OCR uses).
+    model: str = "claude-sonnet-4-6"
+
+
+@dataclass
 class Config:
     user: UserConfig = field(default_factory=UserConfig)
     garmin: GarminConfig = field(default_factory=GarminConfig)
@@ -104,6 +111,7 @@ class Config:
     recovery: RecoveryConfig = field(default_factory=RecoveryConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
+    coach: CoachConfig = field(default_factory=CoachConfig)
 
 
 def load(path: Path | None = None) -> Config:
@@ -145,6 +153,9 @@ def load(path: Path | None = None) -> Config:
 
     if k := raw.get("knowledge"):
         cfg.knowledge = KnowledgeConfig(**{kk: vv for kk, vv in k.items() if hasattr(KnowledgeConfig, kk)})
+
+    if co := raw.get("coach"):
+        cfg.coach = CoachConfig(**{kk: vv for kk, vv in co.items() if hasattr(CoachConfig, kk)})
 
     return cfg
 

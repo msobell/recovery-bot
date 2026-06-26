@@ -175,17 +175,23 @@ def get_training_load(days: int = 28) -> dict:
     """
     from sqlalchemy import select, func
     from recovery.db.models import StravaActivity, GarminDaily
+    from recovery.analysis.dedupe import strava_duplicate_ids
 
     session = _session()
     try:
         today = date.today()
+        # Strava rows mirroring a Garmin strength session would double-count load.
+        dupes = strava_duplicate_ids(session)
 
         def load_for_window(d: int) -> dict:
             start = today - timedelta(days=d)
-            rows = session.execute(
-                select(StravaActivity)
-                .where(StravaActivity.date >= start, StravaActivity.date <= today)
-            ).scalars().all()
+            rows = [
+                r for r in session.execute(
+                    select(StravaActivity)
+                    .where(StravaActivity.date >= start, StravaActivity.date <= today)
+                ).scalars().all()
+                if r.strava_id not in dupes
+            ]
             return {
                 "activity_count": len(rows),
                 "total_duration_hours": round(sum(r.duration_sec or 0 for r in rows) / 3600, 1),

@@ -32,5 +32,6 @@ htmlcov/
 .vscode/
 *.swp
 .envrc
+.env
 SPEC.md
 .claude/settings.local.json

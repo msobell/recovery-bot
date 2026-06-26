@@ -4,9 +4,11 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from recovery.analysis.dedupe import strava_duplicate_ids
 from recovery.analysis.recovery import assess, get_snapshot, get_trend, get_recent_activities
 from recovery.db.models import GarminActivity, GarminDaily, GarminStrengthSet, StravaActivity, WeightEntry
 from recovery.db.session import get_session, init_db
@@ -335,10 +337,15 @@ def sleep_night(night_date: str):
             "resting_hr": _avg("resting_hr", 0),
         }
 
-        # Workouts the previous day (what this night was recovering from)
+        # Workouts the previous day (what this night was recovering from).
+        # Skip Strava rows that just mirror a Garmin strength session (Garmin is
+        # authoritative for strength), so a lift isn't listed twice.
         prev = d - timedelta(days=1)
+        dupes = strava_duplicate_ids(session)
         workouts = []
         for a in session.execute(select(StravaActivity).where(StravaActivity.date == prev)).scalars():
+            if a.strava_id in dupes:
+                continue
             workouts.append({
                 "id": a.strava_id, "source": "strava", "name": a.name or a.sport_type,
                 "sport_type": a.sport_type,
@@ -434,9 +441,13 @@ def trend(days: int = Query(default=30, ge=7, le=365)):
             .where(GarminActivity.date.in_(prev_dates))
         ).scalars().all()
 
-        # Map previous-day date → list of workout dicts
+        # Map previous-day date → list of workout dicts. Skip Strava rows that
+        # mirror a Garmin strength session so lifts aren't double-listed.
+        dupes = strava_duplicate_ids(session)
         workouts: dict[date, list] = {}
         for a in strava_rows:
+            if a.strava_id in dupes:
+                continue
             workouts.setdefault(a.date, []).append({
                 "id": a.strava_id, "name": a.name or a.sport_type, "source": "strava"
             })
@@ -479,10 +490,13 @@ def activities(days: int = Query(default=30, ge=1, le=365), sport: str | None = 
             StravaActivity.date <= end,
         ).order_by(StravaActivity.date.desc())
         rows = session.execute(q).scalars().all()
+        dupes = strava_duplicate_ids(session)
         data = []
         for r in rows:
             if sport and r.sport_type != sport:
                 continue
+            if r.strava_id in dupes:
+                continue  # mirrors a Garmin strength session
             data.append({
                 "id": r.strava_id,
                 "date": str(r.date),
@@ -563,8 +577,11 @@ def training_load(days: int = Query(default=60, ge=14, le=365)):
             .order_by(StravaActivity.date)
         ).scalars().all()
 
+        dupes = strava_duplicate_ids(session)
         by_date: dict[str, int] = {}
         for r in rows:
+            if r.strava_id in dupes:
+                continue  # don't inflate load with a Garmin-mirrored lift
             ds = str(r.date)
             by_date[ds] = by_date.get(ds, 0) + (r.suffer_score or 0)
 
@@ -615,3 +632,58 @@ def remove_document(doc_id: str):
     if removed == 0:
         raise HTTPException(status_code=404, detail="Document not found.")
     return {"deleted_chunks": removed}
+
+
+# ── Coach: generate a recovery-aware workout (streams from Claude) ───────────
+
+class GenerateWorkout(BaseModel):
+    type: str  # "cardio" | "strength"
+    instructions: str = ""
+
+
+@router.post("/generate-workout")
+def generate_workout(body: GenerateWorkout):
+    """Stream a recovery-grounded workout suggestion as plain-text chunks."""
+    from recovery.analysis.coach import stream_workout, CoachUnavailable
+
+    if body.type not in ("cardio", "strength"):
+        raise HTTPException(status_code=400, detail="type must be 'cardio' or 'strength'.")
+
+    def gen():
+        session = _session()
+        try:
+            for delta in stream_workout(session, body.type, body.instructions):
+                yield delta
+        except CoachUnavailable as e:
+            yield f"\n\n⚠️ {e}\nSet ANTHROPIC_API_KEY in the server environment to enable workout generation."
+        except Exception as e:
+            yield f"\n\n⚠️ Generation failed: {e}"
+        finally:
+            session.close()
+
+    return StreamingResponse(gen(), media_type="text/plain; charset=utf-8")
+
+
+class SaveWorkout(BaseModel):
+    type: str
+    instructions: str = ""
+    workout: str
+
+
+@router.post("/generate-workout/save")
+def save_workout(body: SaveWorkout):
+    """Save a generated workout suggestion to the personal memory layer."""
+    from recovery.mcp.memory_tools import save_memory
+
+    day = str(date.today())
+    note = (
+        f"[{day}] Suggested {body.type} workout"
+        + (f" (instructions: {body.instructions.strip()})" if body.instructions.strip() else "")
+        + f":\n{body.workout}"
+    )
+    result = save_memory(
+        note,
+        entities=[body.type, "workout_suggestion"],
+        metadata={"type": "workout_suggestion", "workout_type": body.type, "date": day},
+    )
+    return {"ok": True, "detail": result}

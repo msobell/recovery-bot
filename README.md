@@ -134,6 +134,15 @@ The **Documents** tab lets you drag-and-drop PDFs — training plans, research p
 - **Separate from personal memory.** The corpus lives in its own database, `~/.recovery-bot/knowledge.db`, so general reference text never mixes with your hand-curated notes. Delete that file to rebuild the corpus from scratch without touching personal memory.
 - **Scanned PDFs** (image-only, no text layer) are OCR'd page-by-page via Claude Haiku — set `ANTHROPIC_API_KEY` in your environment to enable it. Text-based PDFs need no key. Configure under `[knowledge]` in `config.toml` (`ocr_enabled`, `ocr_model`, `max_pdf_mb`).
 
+## Coach (suggested workouts)
+
+The **Coach** tab generates a recovery-aware workout for today. Type any free-text instructions ("really want a heavy day", "feeling lazy", "lifting with a friend — make it fun"), then hit **Generate Cardio** or **Generate Strength**. The plan streams in live.
+
+- **Recovery-first.** Today's recovery score and HRV govern intensity; your instructions shape exercise choice and tone but won't push past what recovery supports — and it tells you when it scales back and why.
+- **Grounded in your data.** Strength suggestions use your recent lift history (weights/reps per exercise) for sensible progression; cardio uses recent sessions + recovery.
+- **Save to memory.** Click **Save to memory** to store a suggestion in the personal memory layer.
+- Calls the Claude API server-side (`[coach]` `model`, default Sonnet 4.6) — needs `ANTHROPIC_API_KEY` in the environment.
+
 ## Data storage
 
 Personal data lives in `~/.recovery-bot/recovery.db`; the document corpus lives in `~/.recovery-bot/knowledge.db` (both SQLite). Nothing leaves your machine except OCR calls (only when ingesting scanned PDFs).

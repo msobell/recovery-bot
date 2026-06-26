@@ -81,6 +81,7 @@ def _parse_activity(a: dict) -> dict:
     return {
         "strava_id": a["id"],
         "date": start_dt.date(),
+        "start_time": start_dt,
         "name": a.get("name"),
         "sport_type": a.get("sport_type") or a.get("type"),
         "duration_sec": a.get("moving_time"),

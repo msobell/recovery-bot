@@ -30,6 +30,11 @@ ocr_enabled = true
 ocr_model = "claude-haiku-4-5"
 max_pdf_mb = 25
 
+[coach]
+# Workout generation (Coach tab) calls the Claude API server-side and needs
+# ANTHROPIC_API_KEY in the environment.
+model = "claude-sonnet-4-6"
+
 [equipment]
 sauna = false
 squat_rack = false
