@@ -68,6 +68,12 @@ class StravaActivity(Base):
 
 
 class GarminActivity(Base):
+    """A Garmin-recorded activity of any type.
+
+    Strength sessions (sport_type in strength_training/weight_training) carry
+    detailed `sets`; cardio/other activities carry the summary fields below and
+    an empty `sets`. `is_strength` distinguishes them cheaply.
+    """
     __tablename__ = "garmin_activities"
 
     garmin_id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -76,6 +82,14 @@ class GarminActivity(Base):
     sport_type: Mapped[str | None] = mapped_column(String(64))
     duration_sec: Mapped[int | None] = mapped_column(Integer)
     avg_hr: Mapped[float | None] = mapped_column(Float)
+    # Cardio / summary fields (null for strength sessions)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime)
+    distance_m: Mapped[float | None] = mapped_column(Float)
+    elevation_m: Mapped[float | None] = mapped_column(Float)
+    max_hr: Mapped[int | None] = mapped_column(Integer)
+    calories: Mapped[int | None] = mapped_column(Integer)
+    # True for strength sessions (have detailed sets); False for cardio/other.
+    is_strength: Mapped[bool | None] = mapped_column(Integer, default=1)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     # When true, this session has been hand-curated; sync must NOT touch its sets.
     manually_edited: Mapped[bool | None] = mapped_column(Integer, default=0)

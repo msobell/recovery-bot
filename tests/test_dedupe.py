@@ -79,3 +79,47 @@ def test_no_garmin_strength_means_no_dupes(db_session):
     ))
     db_session.commit()
     assert strava_duplicate_ids(db_session) == set()
+
+
+# ── Cardio dedup (Garmin activities ingested directly) ────────────────────
+
+def test_garmin_cardio_dedupes_its_strava_mirror(db_session):
+    """A Garmin cardio activity (start_time is LOCAL naive) dedupes the Strava
+    row that mirrors it."""
+    y = date(2024, 3, 10)
+    # Garmin soccer at local 16:53 (startTimeLocal is already local)
+    db_session.add(GarminActivity(
+        garmin_id=100, date=y, name="Soccer", sport_type="soccer",
+        start_time=datetime(y.year, y.month, y.day, 16, 53, 0),
+        duration_sec=3550, avg_hr=129, is_strength=0,
+    ))
+    # Its Strava mirror, local 16:54
+    db_session.add(StravaActivity(
+        strava_id=200, date=y, start_time=datetime(y.year, y.month, y.day, 16, 54, 0),
+        name="Afternoon Workout", sport_type="Workout", duration_sec=3549,
+    ))
+    # An unrelated Strava run in the morning — kept
+    db_session.add(StravaActivity(
+        strava_id=201, date=y, start_time=datetime(y.year, y.month, y.day, 7, 0, 0),
+        name="Morning Run", sport_type="Run", duration_sec=1800,
+    ))
+    db_session.commit()
+    dupes = strava_duplicate_ids(db_session)
+    assert 200 in dupes
+    assert 201 not in dupes
+
+
+def test_garmin_cardio_far_apart_not_deduped(db_session):
+    """Same day, but starts >30 min apart → two distinct activities, not a dupe."""
+    y = date(2024, 3, 10)
+    db_session.add(GarminActivity(
+        garmin_id=101, date=y, name="Morning Ride", sport_type="cycling",
+        start_time=datetime(y.year, y.month, y.day, 7, 0, 0),
+        duration_sec=3600, is_strength=0,
+    ))
+    db_session.add(StravaActivity(
+        strava_id=210, date=y, start_time=datetime(y.year, y.month, y.day, 18, 0, 0),
+        name="Evening Run", sport_type="Run", duration_sec=1800,
+    ))
+    db_session.commit()
+    assert strava_duplicate_ids(db_session) == set()

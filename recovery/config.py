@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import logging
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_CONFIG_PATH = Path.cwd() / "config.toml"
+# Fallback when the process isn't started from the repo root (launchd, MCP
+# server spawned by Claude Desktop, etc.) — silently loading all-defaults
+# means wrong timezone and thresholds.
+_PACKAGE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
 
 
 @dataclass
@@ -115,8 +122,14 @@ class Config:
 
 
 def load(path: Path | None = None) -> Config:
-    path = path or _DEFAULT_CONFIG_PATH
+    if path is None:
+        path = _DEFAULT_CONFIG_PATH if _DEFAULT_CONFIG_PATH.exists() else _PACKAGE_CONFIG_PATH
     if not path.exists():
+        logger.warning(
+            "No config.toml found in %s or %s — using built-in defaults "
+            "(timezone %s, no equipment).",
+            _DEFAULT_CONFIG_PATH.parent, _PACKAGE_CONFIG_PATH.parent, UserConfig.timezone,
+        )
         return Config()
 
     with open(path, "rb") as f:

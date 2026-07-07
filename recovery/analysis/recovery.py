@@ -124,7 +124,7 @@ def get_trend(session: Session, days: int = 14) -> list[DailySnapshot]:
 def get_recent_activities(session: Session, days: int = 7) -> list[dict]:
     from recovery.analysis.dedupe import strava_duplicate_ids
     end = date.today()
-    start = end - timedelta(days=days)
+    start = end - timedelta(days=days - 1)  # inclusive window: exactly `days` days
     rows = session.execute(
         select(StravaActivity)
         .where(StravaActivity.date >= start, StravaActivity.date <= end)
@@ -160,6 +160,24 @@ def assess(snapshot: DailySnapshot | None, cfg=None) -> RecoveryAssessment:
             hrv_vs_baseline_pct=None,
             signals=[],
             warnings=["No data available for today."],
+        )
+
+    # A row can exist with no metrics yet (partial early-morning sync).
+    # Scoring it would yield 0 → "Moderate"/"Easy" off zero evidence.
+    has_signal = any(v is not None for v in (
+        snapshot.hrv_rmssd,
+        snapshot.hrv_status,
+        snapshot.sleep_score,
+        snapshot.sleep_duration_min,
+        snapshot.overnight_stress_avg,
+    ))
+    if not has_signal:
+        return RecoveryAssessment(
+            status=RecoveryStatus.NO_DATA,
+            recommended_intensity=RecommendedIntensity.REST,
+            hrv_vs_baseline_pct=None,
+            signals=[],
+            warnings=["Data row exists but no recovery metrics have synced yet."],
         )
 
     signals: list[str] = []
@@ -261,7 +279,8 @@ def build_workout_context(session: Session, day: date | None = None) -> dict:
 
     hrv_trend = [s.hrv_rmssd for s in trend if s.hrv_rmssd is not None]
     hrv_direction = "stable"
-    if len(hrv_trend) >= 3:
+    # Need >= 6 points so the first-3/last-3 windows don't overlap
+    if len(hrv_trend) >= 6:
         recent_avg = sum(hrv_trend[-3:]) / 3
         older_avg = sum(hrv_trend[:3]) / 3
         if recent_avg > older_avg * 1.05:

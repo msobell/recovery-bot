@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import select
 
-from recovery.db.models import GarminDaily, StravaActivity, SyncLog
+from recovery.db.models import GarminActivity, GarminDaily, StravaActivity, SyncLog
 from recovery.ingest import sync
 
 
@@ -75,6 +75,59 @@ def test_upsert_strava_updates_existing_activity(db_session):
     db_session.commit()
     row = db_session.get(StravaActivity, 1)
     assert row.suffer_score == 75
+
+
+# ── _upsert_garmin_activity (cardio/other) ────────────────────────────────
+
+def test_upsert_garmin_activity_inserts_cardio(db_session):
+    act = {
+        "garmin_id": 900, "date": date(2024, 1, 5), "name": "Soccer",
+        "sport_type": "soccer", "start_time": datetime(2024, 1, 5, 16, 0, 0),
+        "duration_sec": 3600, "distance_m": None, "avg_hr": 129.0,
+        "max_hr": 172, "calories": 500,
+    }
+    assert sync._upsert_garmin_activity(db_session, act) is True
+    db_session.commit()
+    row = db_session.get(GarminActivity, 900)
+    assert row.sport_type == "soccer"
+    assert row.is_strength == 0
+    assert row.max_hr == 172
+
+
+def test_upsert_garmin_activity_updates_existing(db_session):
+    db_session.add(GarminActivity(
+        garmin_id=901, date=date(2024, 1, 5), sport_type="running",
+        duration_sec=1000, is_strength=0, synced_at=datetime.now(),
+    ))
+    db_session.commit()
+    sync._upsert_garmin_activity(db_session, {
+        "garmin_id": 901, "date": date(2024, 1, 5), "sport_type": "running",
+        "duration_sec": 1800, "avg_hr": 140.0,
+    })
+    db_session.commit()
+    row = db_session.get(GarminActivity, 901)
+    assert row.duration_sec == 1800
+    assert row.avg_hr == 140.0
+
+
+def test_upsert_garmin_activity_wont_clobber_strength(db_session):
+    """A strength session sharing the id must never be downgraded to cardio."""
+    db_session.add(GarminActivity(
+        garmin_id=902, date=date(2024, 1, 5), name="Strength",
+        sport_type="strength_training", is_strength=1, synced_at=datetime.now(),
+    ))
+    db_session.commit()
+    result = sync._upsert_garmin_activity(db_session, {
+        "garmin_id": 902, "date": date(2024, 1, 5), "sport_type": "running",
+    })
+    assert result is False
+    row = db_session.get(GarminActivity, 902)
+    assert row.is_strength == 1
+    assert row.sport_type == "strength_training"
+
+
+def test_upsert_garmin_activity_returns_false_when_no_id(db_session):
+    assert sync._upsert_garmin_activity(db_session, {"date": date(2024, 1, 5)}) is False
 
 
 # ── _last_garmin_date / _last_strava_date ─────────────────────────────────

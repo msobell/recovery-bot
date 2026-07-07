@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -26,6 +26,7 @@ def _save_token(token: dict) -> None:
     _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(_TOKEN_PATH, "w") as f:
         json.dump(token, f, indent=2)
+    _TOKEN_PATH.chmod(0o600)  # holds OAuth access + refresh tokens
 
 
 def _refresh_token(client_id: str, client_secret: str, token: dict) -> dict:
@@ -106,18 +107,28 @@ def fetch_activities(
     if after:
         params["after"] = int(datetime(after.year, after.month, after.day, tzinfo=timezone.utc).timestamp())
     if before:
-        params["before"] = int(datetime(before.year, before.month, before.day, 23, 59, 59, tzinfo=timezone.utc).timestamp())
+        # Strava filters on UTC start time but `before` is a local date; pad
+        # by 2 days so late-evening local activities in any timezone are
+        # included (the upsert is idempotent, so over-fetching is harmless)
+        before_dt = datetime(before.year, before.month, before.day, tzinfo=timezone.utc) + timedelta(days=2)
+        params["before"] = int(before_dt.timestamp())
 
     activities = []
-    while True:
-        resp = client.get("/athlete/activities", params=params)
-        resp.raise_for_status()
-        page = resp.json()
-        if not page:
-            break
-        activities.extend(_parse_activity(a) for a in page)
-        if len(page) < 200:
-            break
-        params["page"] += 1
+    with client:
+        while True:
+            resp = client.get("/athlete/activities", params=params)
+            if resp.status_code == 429:
+                raise RuntimeError(
+                    "Strava rate limit hit (429). Limits reset every 15 minutes; "
+                    f"already fetched {len(activities)} activities — rerun later."
+                )
+            resp.raise_for_status()
+            page = resp.json()
+            if not page:
+                break
+            activities.extend(_parse_activity(a) for a in page)
+            if len(page) < 200:
+                break
+            params["page"] += 1
 
     return activities

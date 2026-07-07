@@ -1,7 +1,8 @@
 """MCP server for Claude Desktop — exposes recovery data and workout recommendations."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+import threading
+from datetime import date, datetime, timedelta
 
 from fastmcp import FastMCP
 
@@ -28,14 +29,12 @@ def get_today_status() -> dict:
     Call this when the user asks 'what's my condition today?' or similar.
     """
     from recovery.analysis.recovery import assess, get_snapshot
-    from recovery import config as cfg_mod
 
     session = _session()
     try:
         day = date.today()
         snapshot = get_snapshot(session, day)
         assessment = assess(snapshot)
-        cfg = cfg_mod.get()
 
         result = {
             "as_of_date": str(day),
@@ -64,7 +63,7 @@ def get_today_status() -> dict:
                 "stress_second_half_min": snapshot.stress_second_half_min,
                 "stress_recovery_delta": snapshot.stress_recovery_delta,
                 "stress_recovery_pct": round(snapshot.stress_recovery_delta / snapshot.stress_first_half_avg * 100, 1)
-                    if snapshot.stress_recovery_delta and snapshot.stress_first_half_avg else None,
+                    if snapshot.stress_recovery_delta is not None and snapshot.stress_first_half_avg else None,
                 "stress_time_below_20_min": snapshot.stress_time_below_20_min,
             }
 
@@ -97,7 +96,7 @@ def get_recovery_trend(days: int = 14) -> dict:
                 "steps": s.steps,
                 "stress_recovery_delta": s.stress_recovery_delta,
                 "stress_recovery_pct": round(s.stress_recovery_delta / s.stress_first_half_avg * 100, 1)
-                    if s.stress_recovery_delta and s.stress_first_half_avg else None,
+                    if s.stress_recovery_delta is not None and s.stress_first_half_avg else None,
             })
 
         hrv_vals = [s.hrv_rmssd for s in snapshots if s.hrv_rmssd]
@@ -233,11 +232,17 @@ def query_date_range(metric: str, start_date: str, end_date: str) -> dict:
     from sqlalchemy import select
     from recovery.db.models import GarminDaily, StravaActivity
 
-    session = _session()
+    valid_metrics = {"hrv", "sleep", "rhr", "stress", "steps", "activities"}
+    if metric not in valid_metrics:
+        return {"error": f"Unknown metric '{metric}'. Valid metrics: {', '.join(sorted(valid_metrics))}."}
     try:
         start = date.fromisoformat(start_date)
         end = date.fromisoformat(end_date)
+    except ValueError as e:
+        return {"error": f"Invalid date: {e}. Use YYYY-MM-DD."}
 
+    session = _session()
+    try:
         if metric == "activities":
             rows = session.execute(
                 select(StravaActivity)
@@ -277,7 +282,7 @@ def query_date_range(metric: str, start_date: str, end_date: str) -> dict:
             "steps": lambda r: {"steps": r.steps},
         }
 
-        extract = field_map.get(metric, lambda r: {})
+        extract = field_map[metric]
         return {
             "metric": metric,
             "start": start_date,
@@ -390,7 +395,7 @@ def get_exercise_history(exercise: str, days: int = 90) -> dict:
 
         # Group by date
         by_date: dict[str, list] = {}
-        for s in sorted(matching, key=lambda x: (x.start_time or date.min,)):
+        for s in sorted(matching, key=lambda x: x.start_time or datetime.min):
             act_date = str(session.get(GarminActivity, s.garmin_activity_id).date)
             by_date.setdefault(act_date, []).append({
                 "reps": s.reps,
@@ -619,8 +624,10 @@ def _sport_breakdown(rows) -> dict:
     return breakdown
 
 
-# Background sync state — written by the worker thread, read by get_sync_status
+# Background sync state — written by the worker thread, read by get_sync_status.
+# _sync_lock serializes the check-then-start in sync_missing_days.
 _sync_state: dict = {"status": "idle"}
+_sync_lock = threading.Lock()
 
 
 def _run_sync_missing(days: int | None) -> None:
@@ -629,7 +636,9 @@ def _run_sync_missing(days: int | None) -> None:
     from sqlalchemy import select, func
     from recovery.db.models import GarminDaily, StravaActivity
     from recovery.ingest import garmin, strava
-    from recovery.ingest.sync import _upsert_garmin, _upsert_strength, _upsert_strava, _upsert_weight
+    from recovery.ingest.sync import (
+        _upsert_garmin, _upsert_garmin_activity, _upsert_strength, _upsert_strava, _upsert_weight,
+    )
     from recovery.ingest.trendweight import fetch_measurements
     from recovery import config as cfg_mod
 
@@ -667,6 +676,8 @@ def _run_sync_missing(days: int | None) -> None:
                 session.commit()
                 for act in garmin.fetch_strength_activities(api, d):
                     _upsert_strength(session, act)
+                for act in garmin.fetch_cardio_activities(api, d):
+                    _upsert_garmin_activity(session, act)
                 session.commit()
                 garmin_synced += 1
             except Exception as e:
@@ -678,7 +689,9 @@ def _run_sync_missing(days: int | None) -> None:
         _sync_state["progress"] = "Strava"
         try:
             last_strava = session.execute(select(func.max(StravaActivity.date))).scalar()
-            strava_after = (last_strava + timedelta(days=1)) if last_strava else (earliest or yesterday)
+            # Overlap by a day: activities recorded later on the last-synced
+            # day would otherwise be skipped forever (upsert is idempotent)
+            strava_after = (last_strava - timedelta(days=1)) if last_strava else (earliest or yesterday)
             for act in strava.fetch_activities(cfg.strava.client_id, cfg.strava.client_secret, after=strava_after):
                 if _upsert_strava(session, act):
                     strava_synced += 1
@@ -731,25 +744,23 @@ def sync_missing_days(days: int = 1, all_missing: bool = False) -> dict:
     all_missing: scan the entire history and fill every gap, ignoring `days`.
           User says "fetch all missing data" -> all_missing=True.
     """
-    import threading
-    from datetime import datetime
+    with _sync_lock:
+        if _sync_state.get("status") == "running":
+            return {
+                "status": "already_running",
+                "progress": _sync_state.get("progress"),
+                "message": "A sync is already in progress. Call get_sync_status() to monitor it.",
+            }
 
-    if _sync_state.get("status") == "running":
-        return {
-            "status": "already_running",
-            "progress": _sync_state.get("progress"),
-            "message": "A sync is already in progress. Call get_sync_status() to monitor it.",
-        }
-
-    effective_days = None if all_missing else max(1, days)
-    _sync_state.clear()
-    _sync_state.update(
-        status="running",
-        progress="starting",
-        started_at=datetime.now().isoformat(timespec="seconds"),
-        scope="all missing days" if all_missing else f"last {effective_days} day(s)",
-    )
-    threading.Thread(target=_run_sync_missing, args=(effective_days,), daemon=True).start()
+        effective_days = None if all_missing else max(1, days)
+        _sync_state.clear()
+        _sync_state.update(
+            status="running",
+            progress="starting",
+            started_at=datetime.now().isoformat(timespec="seconds"),
+            scope="all missing days" if all_missing else f"last {effective_days} day(s)",
+        )
+        threading.Thread(target=_run_sync_missing, args=(effective_days,), daemon=True).start()
 
     return {
         "status": "started",

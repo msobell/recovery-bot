@@ -12,7 +12,7 @@ import json
 import logging
 import uuid
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from recovery.config import get as get_config
@@ -84,17 +84,26 @@ def ingest_pdf(filename: str, pdf_bytes: bytes) -> dict:
                 {"c": content, "id": mem.id},
             )
             if have_vec:
-                blob = sqlite_vec.serialize_float32(emb)
-                session.execute(
-                    text("INSERT INTO memories_vec(id, embedding) VALUES(:id, :emb)"),
-                    {"id": mem.id, "emb": blob},
-                )
+                # Degrade to FTS-only if the vec0 table is unavailable (the
+                # import succeeding doesn't guarantee the extension loaded on
+                # this connection) — mirrors save_memory
+                try:
+                    blob = sqlite_vec.serialize_float32(emb)
+                    session.execute(
+                        text("INSERT INTO memories_vec(id, embedding) VALUES(:id, :emb)"),
+                        {"id": mem.id, "emb": blob},
+                    )
+                except Exception as e:
+                    logger.warning("vector index insert failed, continuing FTS-only: %s", e)
+                    have_vec = False
 
         session.commit()
         return {
             "doc_id": doc_id,
             "filename": filename,
-            "pages": len(pages),
+            # Highest page number that yielded a chunk — same definition
+            # list_documents uses, so upload and list agree
+            "pages": max(p for p, _ in pages),
             "chunks": len(chunk_items),
             "used_ocr": used_ocr,
         }
@@ -137,11 +146,18 @@ def list_documents() -> list[dict]:
 
 def delete_document(doc_id: str) -> int:
     """Delete all chunks for a doc_id from the corpus DB. Returns rows removed."""
+    # doc_ids are always UUIDs; reject anything else before it reaches a query
+    # (LIKE-style matching on raw input allowed wildcard deletes)
+    try:
+        uuid.UUID(doc_id)
+    except (ValueError, AttributeError, TypeError):
+        return 0
+
     session = get_knowledge_session()
     try:
         ensure_virtual_tables(session)
         rows = session.query(Memory).filter(
-            Memory.metadata_json.like(f'%"doc_id": "{doc_id}"%')
+            func.json_extract(Memory.metadata_json, "$.doc_id") == doc_id
         ).all()
         ids = [m.id for m in rows]
         if not ids:

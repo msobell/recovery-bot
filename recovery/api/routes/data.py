@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from recovery.analysis.dedupe import strava_duplicate_ids
@@ -48,7 +48,7 @@ def today_status():
                 "stress_recovery_delta": snapshot.stress_recovery_delta,
                 "stress_time_below_20_min": snapshot.stress_time_below_20_min,
                 "stress_recovery_pct": round(snapshot.stress_recovery_delta / snapshot.stress_first_half_avg * 100, 1)
-                    if snapshot.stress_recovery_delta and snapshot.stress_first_half_avg else None,
+                    if snapshot.stress_recovery_delta is not None and snapshot.stress_first_half_avg else None,
             }
         return {
             "date": str(day),
@@ -148,9 +148,11 @@ def today_activities():
 
 
 class SetUpdate(BaseModel):
+    # ge/gt guards: a cleared input box submits 0, which would otherwise be
+    # saved and locked in by the manually_edited flag
     category: str | None = None
-    reps: int | None = None
-    weight_lbs: float | None = None
+    reps: int | None = Field(default=None, ge=1)
+    weight_lbs: float | None = Field(default=None, gt=0)
 
 
 @router.patch("/strength/set/{set_id}")
@@ -238,7 +240,7 @@ def activity_detail(strava_id: int):
 
 
 @router.get("/sleep")
-def sleep(days: int = Query(default=30, ge=7, le=365)):
+def sleep(days: int = Query(default=30, ge=3, le=365)):
     session = _session()
     try:
         end = date.today()
@@ -260,18 +262,22 @@ def sleep(days: int = Query(default=30, ge=7, le=365)):
                 "rem_min": r.sleep_rem_min,
                 "light_min": r.sleep_light_min,
                 "awake_min": r.sleep_awake_min,
-                "overnight_stress": round(r.overnight_stress_avg, 1) if r.overnight_stress_avg else None,
+                "overnight_stress": round(r.overnight_stress_avg, 1) if r.overnight_stress_avg is not None else None,
                 "body_battery": r.body_battery_start,
                 "steps": r.steps,
-                "stress_first_half_avg": round(r.stress_first_half_avg, 1) if r.stress_first_half_avg else None,
-                "stress_second_half_avg": round(r.stress_second_half_avg, 1) if r.stress_second_half_avg else None,
+                "stress_first_half_avg": round(r.stress_first_half_avg, 1) if r.stress_first_half_avg is not None else None,
+                "stress_second_half_avg": round(r.stress_second_half_avg, 1) if r.stress_second_half_avg is not None else None,
                 "stress_second_half_min": r.stress_second_half_min,
-                "stress_recovery_delta": round(r.stress_recovery_delta, 1) if r.stress_recovery_delta else None,
+                "stress_recovery_delta": round(r.stress_recovery_delta, 1) if r.stress_recovery_delta is not None else None,
                 "stress_time_below_20_min": r.stress_time_below_20_min,
             })
 
-        valid = [d for d in data if d["sleep_score"] is not None]
-        avg = lambda key: round(sum(d[key] for d in data if d.get(key)) / max(sum(1 for d in data if d.get(key)), 1), 1)
+        # `is not None`, not truthiness: 0 is a real value (e.g. zero minutes
+        # below stress 20 on a bad night) and must count in the average.
+        # No values at all → None so the UI renders "—" instead of 0.
+        def avg(key):
+            vals = [d[key] for d in data if d.get(key) is not None]
+            return round(sum(vals) / len(vals), 1) if vals else None
 
         from recovery import config as cfg_mod
         cfg = cfg_mod.get()
@@ -456,10 +462,7 @@ def trend(days: int = Query(default=30, ge=7, le=365)):
                 "id": a.garmin_id, "name": a.name or "Strength", "source": "garmin"
             })
 
-        from recovery import config as cfg_mod
-        cfg = cfg_mod.get()
         return {
-            "stress_low_threshold": cfg.recovery.overnight_stress_low,
             "labels": [str(s.date) for s in snapshots],
             "hrv": [s.hrv_rmssd for s in snapshots],
             "hrv_baseline_low": [s.hrv_baseline_low for s in snapshots],
@@ -481,24 +484,51 @@ def trend(days: int = Query(default=30, ge=7, le=365)):
 
 @router.get("/activities")
 def activities(days: int = Query(default=30, ge=1, le=365), sport: str | None = None):
+    """All activities: Garmin (strength + cardio, authoritative) plus Strava
+    activities that don't mirror a Garmin one, newest first."""
     session = _session()
     try:
         end = date.today()
-        start = end - timedelta(days=days)
-        q = select(StravaActivity).where(
-            StravaActivity.date >= start,
-            StravaActivity.date <= end,
-        ).order_by(StravaActivity.date.desc())
-        rows = session.execute(q).scalars().all()
+        start = end - timedelta(days=days - 1)
         dupes = strava_duplicate_ids(session)
         data = []
-        for r in rows:
+
+        # Garmin activities — the source of truth. Strength rows carry sets.
+        garmin_rows = session.execute(
+            select(GarminActivity)
+            .where(GarminActivity.date >= start, GarminActivity.date <= end)
+        ).scalars().all()
+        for a in garmin_rows:
+            if sport and a.sport_type != sport:
+                continue
+            data.append({
+                "id": a.garmin_id,
+                "source": "garmin",
+                "date": str(a.date),
+                "name": a.name or ("Strength" if a.is_strength else a.sport_type),
+                "sport_type": a.sport_type,
+                "duration_min": round(a.duration_sec / 60) if a.duration_sec else None,
+                "distance_km": round(a.distance_m / 1000, 1) if a.distance_m else None,
+                "elevation_m": round(a.elevation_m) if a.elevation_m else None,
+                "avg_hr": round(a.avg_hr) if a.avg_hr else None,
+                "suffer_score": None,
+                "is_strength": bool(a.is_strength),
+                "set_count": len(a.sets) if a.is_strength else None,
+            })
+
+        # Strava activities that aren't a Garmin mirror.
+        strava_rows = session.execute(
+            select(StravaActivity)
+            .where(StravaActivity.date >= start, StravaActivity.date <= end)
+        ).scalars().all()
+        for r in strava_rows:
             if sport and r.sport_type != sport:
                 continue
             if r.strava_id in dupes:
-                continue  # mirrors a Garmin strength session
+                continue  # mirrors a Garmin activity (already listed above)
             data.append({
                 "id": r.strava_id,
+                "source": "strava",
                 "date": str(r.date),
                 "name": r.name,
                 "sport_type": r.sport_type,
@@ -507,7 +537,11 @@ def activities(days: int = Query(default=30, ge=1, le=365), sport: str | None = 
                 "elevation_m": r.elevation_m,
                 "avg_hr": r.avg_hr,
                 "suffer_score": r.suffer_score,
+                "is_strength": False,
+                "set_count": None,
             })
+
+        data.sort(key=lambda x: x["date"], reverse=True)
         return {"days": days, "count": len(data), "activities": data}
     finally:
         session.close()
@@ -570,7 +604,7 @@ def training_load(days: int = Query(default=60, ge=14, le=365)):
     session = _session()
     try:
         end = date.today()
-        start = end - timedelta(days=days)
+        start = end - timedelta(days=days - 1)
         rows = session.execute(
             select(StravaActivity)
             .where(StravaActivity.date >= start, StravaActivity.date <= end)
@@ -593,8 +627,12 @@ def training_load(days: int = Query(default=60, ge=14, le=365)):
 # ── Document corpus (knowledge.db — separate from personal memory) ───────────
 
 @router.post("/documents")
-async def upload_document(file: UploadFile = File(...)):
-    """Ingest a PDF into the document knowledge base (knowledge.db)."""
+def upload_document(file: UploadFile = File(...)):
+    """Ingest a PDF into the document knowledge base (knowledge.db).
+
+    Deliberately a sync route: FastAPI runs it in the threadpool, so the
+    (potentially minutes-long) embed/OCR pipeline can't block the event loop.
+    """
     from recovery.config import get as get_config
     from recovery.knowledge.ingest import ingest_pdf
 
@@ -602,7 +640,7 @@ async def upload_document(file: UploadFile = File(...)):
     if not name.lower().endswith(".pdf") and file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    data = await file.read()
+    data = file.file.read()
     max_bytes = get_config().knowledge.max_pdf_mb * 1024 * 1024
     if len(data) == 0:
         raise HTTPException(status_code=400, detail="Empty file.")
@@ -649,14 +687,31 @@ def generate_workout(body: GenerateWorkout):
     if body.type not in ("cardio", "strength"):
         raise HTTPException(status_code=400, detail="type must be 'cardio' or 'strength'.")
 
+    # Pull the first chunk before streaming starts so setup failures (missing
+    # API key, bad request) become real HTTP errors instead of 200-with-error-
+    # text the frontend can't distinguish from a workout.
+    session = _session()
+    try:
+        stream = stream_workout(session, body.type, body.instructions)
+        first = next(stream, None)
+    except CoachUnavailable as e:
+        session.close()
+        raise HTTPException(
+            status_code=503,
+            detail=f"{e} Set ANTHROPIC_API_KEY in the server environment to enable workout generation.",
+        )
+    except Exception as e:
+        session.close()
+        raise HTTPException(status_code=500, detail=f"Generation failed: {e}")
+
     def gen():
-        session = _session()
         try:
-            for delta in stream_workout(session, body.type, body.instructions):
-                yield delta
-        except CoachUnavailable as e:
-            yield f"\n\n⚠️ {e}\nSet ANTHROPIC_API_KEY in the server environment to enable workout generation."
+            if first is not None:
+                yield first
+                yield from stream
         except Exception as e:
+            # Mid-stream failure — the frontend checks for this marker and
+            # won't offer to save the partial output
             yield f"\n\n⚠️ Generation failed: {e}"
         finally:
             session.close()
@@ -686,4 +741,6 @@ def save_workout(body: SaveWorkout):
         entities=[body.type, "workout_suggestion"],
         metadata={"type": "workout_suggestion", "workout_type": body.type, "date": day},
     )
+    if result.startswith("Error:"):
+        raise HTTPException(status_code=500, detail=result)
     return {"ok": True, "detail": result}

@@ -25,12 +25,27 @@ def reciprocal_rank_fusion(
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 
+def _fts_quote(query: str) -> str:
+    """Escape a natural-language query for FTS5 MATCH.
+
+    Each whitespace token becomes a quoted string ("" escapes embedded
+    quotes), so apostrophes, hyphens, parens, and bare AND/OR/NOT are treated
+    as literal text instead of FTS5 syntax.
+    """
+    tokens = [t.replace('"', '""') for t in query.split()]
+    return " ".join(f'"{t}"' for t in tokens)
+
+
 def hybrid_search(session: Session, query: str, n_results: int = 10) -> List[Memory]:
-    fts_rows = session.execute(
-        text("SELECT id FROM memories_fts WHERE content MATCH :q LIMIT :n"),
-        {"q": query, "n": n_results},
-    ).fetchall()
-    fts_ids = [row[0] for row in fts_rows]
+    fts_ids = []
+    try:
+        fts_rows = session.execute(
+            text("SELECT id FROM memories_fts WHERE content MATCH :q LIMIT :n"),
+            {"q": _fts_quote(query), "n": n_results},
+        ).fetchall()
+        fts_ids = [row[0] for row in fts_rows]
+    except Exception as e:
+        logger.warning(f"FTS search failed, using vector only: {e}")
 
     vec_ids = []
     try:

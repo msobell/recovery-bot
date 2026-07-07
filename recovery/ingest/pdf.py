@@ -9,10 +9,13 @@ Two halves:
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
 
 import fitz  # PyMuPDF
+
+logger = logging.getLogger(__name__)
 
 # --- Tunable knobs -----------------------------------------------------------
 # Pages with fewer than this many extracted chars are treated as scanned/empty
@@ -61,6 +64,8 @@ def ocr_page(img_bytes: bytes, model: str) -> str:
             ],
         }],
     )
+    if resp.stop_reason == "max_tokens":
+        logger.warning("OCR output truncated at max_tokens for a page; text may be incomplete")
     parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
     return "\n".join(parts).strip()
 
@@ -92,9 +97,9 @@ def extract_pages(
                 except OcrUnavailable:
                     # No key — leave whatever (little) text we had; caller decides.
                     pass
-                except Exception:
+                except Exception as e:
                     # OCR failed for this page; skip it rather than fail the upload.
-                    pass
+                    logger.warning("OCR failed for page %d: %s", i, e)
             if text:
                 pages.append((i, text))
     finally:
@@ -103,13 +108,26 @@ def extract_pages(
 
 
 def _hard_split(chunk: str) -> list[str]:
-    """Split an oversize chunk on sentence boundaries, packing up to the cap."""
+    """Split an oversize chunk on sentence boundaries, packing up to the cap.
+
+    A single "sentence" longer than the cap (tables, code, OCR output with no
+    punctuation) is sliced at the cap so the limit is actually hard.
+    """
     if len(chunk) <= MAX_CHUNK_CHARS:
         return [chunk]
     sentences = re.split(r"(?<=[.!?])\s+", chunk)
     out, cur = [], ""
     for s in sentences:
-        if cur and len(cur) + len(s) + 1 > MAX_CHUNK_CHARS:
+        if len(s) > MAX_CHUNK_CHARS:
+            if cur.strip():
+                out.append(cur.strip())
+                cur = ""
+            out.extend(
+                piece.strip()
+                for i in range(0, len(s), MAX_CHUNK_CHARS)
+                if (piece := s[i:i + MAX_CHUNK_CHARS]).strip()
+            )
+        elif cur and len(cur) + len(s) + 1 > MAX_CHUNK_CHARS:
             out.append(cur.strip())
             cur = s
         else:
@@ -142,6 +160,10 @@ def chunk_text(text: str) -> list[str]:
             merged[-1] = f"{merged[-1]}\n\n{p}"
         else:
             merged.append(p)
+    # A trailing fragment after a large chunk survives the forward pass; fold
+    # it back so no one-line scrap gets indexed on its own
+    if len(merged) >= 2 and len(merged[-1]) < MIN_CHUNK_CHARS:
+        merged[-2] = f"{merged[-2]}\n\n{merged.pop()}"
 
     chunks: list[str] = []
     for m in merged:

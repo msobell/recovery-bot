@@ -83,7 +83,9 @@ def auth_strava():
             pass
 
     server = HTTPServer(("localhost", 8081), Handler)
-    thread = threading.Thread(target=server.handle_request)
+    # daemon=True: on timeout the thread is still blocked in accept(); a
+    # non-daemon thread would keep the process alive after SystemExit
+    thread = threading.Thread(target=server.handle_request, daemon=True)
     thread.start()
 
     console.print(f"Opening browser for Strava authorization...")
@@ -91,8 +93,11 @@ def auth_strava():
     server_done.wait(timeout=120)
 
     if "code" not in code_holder:
+        server.server_close()
         console.print("[red]Authorization timed out.[/red]")
         raise SystemExit(1)
+    thread.join(timeout=5)
+    server.server_close()
 
     try:
         exchange_code(cfg.strava.client_id, cfg.strava.client_secret, code_holder["code"])
@@ -135,7 +140,9 @@ def sync_missing(days):
     from recovery.db.session import get_session, init_db
     from recovery.db.models import GarminDaily, StravaActivity
     from recovery.ingest import garmin, strava
-    from recovery.ingest.sync import _upsert_garmin, _upsert_strength, _upsert_strava, _upsert_weight
+    from recovery.ingest.sync import (
+        _upsert_garmin, _upsert_garmin_activity, _upsert_strength, _upsert_strava, _upsert_weight,
+    )
     from recovery.ingest.trendweight import fetch_measurements
     from recovery import config as cfg_mod
     from sqlalchemy import select, func
@@ -174,9 +181,10 @@ def sync_missing(days):
                 data = garmin.fetch_day(d, api=api, delay=1.1)
                 _upsert_garmin(session, data)
                 session.commit()
-                acts = garmin.fetch_strength_activities(api, d)
-                for act in acts:
+                for act in garmin.fetch_strength_activities(api, d):
                     _upsert_strength(session, act)
+                for act in garmin.fetch_cardio_activities(api, d):
+                    _upsert_garmin_activity(session, act)
                 session.commit()
                 garmin_ok += 1
             except Exception as e:
@@ -188,7 +196,9 @@ def sync_missing(days):
         console.print("[bold]Strava:[/bold] fetching new activities...")
         try:
             last_strava = session.execute(select(func.max(StravaActivity.date))).scalar()
-            strava_after = (last_strava + timedelta(days=1)) if last_strava else scan_from
+            # Overlap by a day so activities recorded later on the last-synced
+            # day aren't skipped forever (upsert is idempotent)
+            strava_after = (last_strava - timedelta(days=1)) if last_strava else scan_from
             activities = strava.fetch_activities(cfg.strava.client_id, cfg.strava.client_secret, after=strava_after)
             for act in activities:
                 _upsert_strava(session, act)
@@ -246,12 +256,13 @@ def mcp_cmd(action):
 
 def _install_mcp():
     import json
-    import shutil
     import sys
     from pathlib import Path
 
     config_path = Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-    python = shutil.which("python") or sys.executable
+    # sys.executable, not which("python"): the PATH python may be a different
+    # interpreter without fastmcp installed, giving a server that fails to start
+    python = sys.executable
     recovery_path = str(Path(__file__).parent.parent.resolve())
 
     entry = {
@@ -280,15 +291,22 @@ def _install_mcp():
 @click.argument("csv_path", type=click.Path(exists=True))
 def import_weight(csv_path):
     """Import TrendWeight CSV export into the database."""
-    import csv
     from datetime import datetime
-    from recovery.db.models import WeightEntry
     from recovery.db.session import get_session, init_db
 
     session = get_session(init_db())
-    added = updated = 0
-    now = datetime.now()
+    try:
+        _do_import_weight(session, csv_path, datetime.now())
+    finally:
+        session.close()
 
+
+def _do_import_weight(session, csv_path, now):
+    import csv
+    from datetime import datetime
+    from recovery.db.models import WeightEntry
+
+    added = updated = 0
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -333,7 +351,6 @@ def import_weight(csv_path):
                 added += 1
 
     session.commit()
-    session.close()
     console.print(f"[green]Weight import done. {added} added, {updated} updated.[/green]")
 
 
@@ -348,13 +365,11 @@ def schedule(action):
     plist_dst = Path.home() / "Library" / "LaunchAgents" / "com.recoverybot.sync.plist"
 
     if action == "install":
-        import shutil
         import sys
 
         plist_dst.parent.mkdir(parents=True, exist_ok=True)
         content = plist_src.read_text()
-        python = shutil.which("python") or sys.executable
-        content = content.replace("PYTHON_PATH", python)
+        content = content.replace("PYTHON_PATH", sys.executable)
         plist_dst.write_text(content)
         subprocess.run(["launchctl", "load", str(plist_dst)], check=True)
         console.print(f"[green]launchd job installed and loaded.[/green]")

@@ -305,3 +305,76 @@ def test_get_related_entities_multiple_memories(patched_tools):
     patched_tools.save_memory("User does weighted pull-ups for strength", ["pull-ups"])
     result = patched_tools.get_related_entities("pull-ups")
     assert result.count("pull-ups") >= 2  # entity header + at least one memory
+
+
+# ── Regressions ───────────────────────────────────────────────────────────────
+
+def test_save_memory_duplicate_entities_does_not_lose_note(patched_tools, memory_engine):
+    """['Deadlift', 'deadlift'] normalizes to one entity; the duplicate edge PK
+    used to roll back the entire save."""
+    result = patched_tools.save_memory("Deadlift PR: 315x3", ["Deadlift", "deadlift"])
+    assert "Saved memory" in result
+    assert "1 entities" in result
+    with sessionmaker(bind=memory_engine)() as s:
+        note = s.query(Memory).filter(Memory.content == "Deadlift PR: 315x3").first()
+        assert note is not None
+        edges = s.query(KnowledgeEdge).filter_by(source_id=note.id).all()
+        assert len(edges) == 1
+
+
+def test_save_memory_does_not_reuse_note_as_entity(patched_tools, memory_engine):
+    """A plain note whose whole content equals an entity name must not be
+    linked as if it were the entity node."""
+    patched_tools.save_memory("bench press", [])  # a note, not an entity
+    patched_tools.save_memory("Heavy bench day went well", ["bench press"])
+    with sessionmaker(bind=memory_engine)() as s:
+        rows = s.query(Memory).filter(Memory.content == "bench press").all()
+        assert len(rows) == 2  # the note AND a separate entity node
+        types = {json.loads(r.metadata_json)["type"] if r.metadata_json else None for r in rows}
+        assert types == {None, "entity"}
+
+
+def test_hybrid_search_survives_fts_syntax_characters(memory_session):
+    """Apostrophes, quotes, parens, hyphens, and bare booleans used to raise
+    OperationalError out of the FTS5 MATCH."""
+    _insert_memory_with_indexes(memory_session, "User's knee pain during back-squat (heavy)")
+    with patch("recovery.memory.search.get_embedding", _fake_embedding):
+        for q in ["what's the user's plan", 'knee "pain', "recovery (protocol", "AND", "back-pain"]:
+            results = hybrid_search(memory_session, q)
+            assert isinstance(results, list)
+
+
+def test_hybrid_search_quoted_query_still_matches(memory_session):
+    _insert_memory_with_indexes(memory_session, "User's squat felt strong today")
+    with patch("recovery.memory.search.get_embedding", _fake_embedding):
+        results = hybrid_search(memory_session, "user's squat")
+    assert any("squat" in m.content for m in results)
+
+
+def test_query_memory_apostrophe_query_no_error(patched_tools):
+    patched_tools.save_memory("User's squat felt strong", ["squat"])
+    result = patched_tools.query_memory("user's squat")
+    assert not result.startswith("Error:")
+
+
+def test_get_related_entities_on_fresh_db(tmp_path, monkeypatch):
+    """First-ever call on a fresh DB used to crash on the missing FTS table
+    in the fuzzy-fallback path."""
+    import recovery.mcp.memory_tools as tools_mod
+    engine = create_engine(f"sqlite:///{tmp_path / 'fresh.db'}", echo=False)
+    Base.metadata.create_all(engine)
+    monkeypatch.setattr(tools_mod, "_get_session", lambda: sessionmaker(bind=engine)())
+    monkeypatch.setattr(tools_mod, "get_embedding", _fake_embedding)
+    monkeypatch.setattr("recovery.memory.search.get_embedding", _fake_embedding)
+    result = tools_mod.get_related_entities("anything")
+    assert not result.startswith("Error:")
+    assert "not found" in result.lower()
+
+
+def test_get_related_entities_fuzzy_fallback_picks_entity_node(patched_tools):
+    """Fuzzy fallback must resolve to the entity node (whose in_edges are the
+    mentioning notes), never to a note itself."""
+    patched_tools.save_memory("Practiced kettlebell swings with strict hip hinge", ["kettlebell swings"])
+    result = patched_tools.get_related_entities("kettlebell swing")  # near miss
+    assert "closest match" in result.lower()
+    assert "kettlebell swings" in result.lower()

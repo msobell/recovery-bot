@@ -116,6 +116,67 @@ def test_activities_count_matches(client):
     assert body["count"] == len(body["activities"])
 
 
+@pytest.fixture()
+def recent_activities_db(db_engine, populated_db):
+    """Today-relative Garmin strength + cardio and Strava (one mirror, one not)."""
+    from sqlalchemy.orm import sessionmaker
+    from recovery.db.models import GarminActivity, GarminStrengthSet
+    today = date.today()
+    d = today - timedelta(days=1)
+    with sessionmaker(bind=db_engine)() as s:
+        # Garmin strength with 2 sets
+        s.add(GarminActivity(
+            garmin_id=700, date=d, name="Push Day", sport_type="strength_training",
+            duration_sec=3600, is_strength=1, synced_at=datetime.now(),
+        ))
+        s.add_all([
+            GarminStrengthSet(garmin_activity_id=700, set_index=0, exercise_category="BENCH_PRESS", reps=5,
+                              start_time=datetime.combine(d, datetime.min.time()).replace(hour=17)),
+            GarminStrengthSet(garmin_activity_id=700, set_index=1, exercise_category="BENCH_PRESS", reps=5),
+        ])
+        # Garmin cardio (soccer) at local 16:00
+        s.add(GarminActivity(
+            garmin_id=701, date=d, name="Soccer", sport_type="soccer",
+            start_time=datetime.combine(d, datetime.min.time()).replace(hour=16),
+            duration_sec=3550, avg_hr=129, is_strength=0, synced_at=datetime.now(),
+        ))
+        # Strava mirror of the soccer (should dedupe out)
+        s.add(StravaActivity(
+            strava_id=800, date=d, start_time=datetime.combine(d, datetime.min.time()).replace(hour=16, minute=1),
+            name="Afternoon Workout", sport_type="Workout", duration_sec=3549, synced_at=datetime.now(),
+        ))
+        # Genuine Strava-only run in the morning (should show)
+        s.add(StravaActivity(
+            strava_id=801, date=d, start_time=datetime.combine(d, datetime.min.time()).replace(hour=7),
+            name="Morning Run", sport_type="Run", duration_sec=1800, distance_m=5000.0,
+            suffer_score=55, synced_at=datetime.now(),
+        ))
+        s.commit()
+    return db_engine
+
+
+def test_activities_includes_garmin_strength_and_cardio(recent_activities_db, client):
+    body = client.get("/api/activities?days=7").json()
+    by_id = {a["id"]: a for a in body["activities"]}
+    # Garmin strength present with set_count
+    assert 700 in by_id
+    assert by_id[700]["source"] == "garmin"
+    assert by_id[700]["is_strength"] is True
+    assert by_id[700]["set_count"] == 2
+    # Garmin cardio present
+    assert 701 in by_id and by_id[701]["source"] == "garmin"
+    # Strava mirror of the soccer is deduped out
+    assert 800 not in by_id
+    # Genuine Strava run is kept
+    assert 801 in by_id and by_id[801]["source"] == "strava"
+
+
+def test_activities_sorted_newest_first(recent_activities_db, client):
+    body = client.get("/api/activities?days=7").json()
+    dates = [a["date"] for a in body["activities"]]
+    assert dates == sorted(dates, reverse=True)
+
+
 # ── GET /api/training-load ────────────────────────────────────────────────
 
 def test_training_load_returns_labels_and_scores(client):

@@ -144,6 +144,7 @@
     .set-field:hover, .set-field:focus { border-color: var(--border-strong); background: var(--bg); outline: none; }
     .set-field.saving { border-color: var(--accent); }
     .set-field.saved { border-color: var(--excellent); }
+    .set-field.save-error { border-color: var(--poor); }
     .day-group { margin-bottom: 18px; }
     .day-group:last-child { margin-bottom: 0; }
     .day-label { font-size: 0.7rem; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
@@ -313,6 +314,8 @@
     <div id="sleep" class="tab-content">
       <div class="chart-controls">
         <select id="sleep-days" onchange="loadSleep()">
+          <option value="3">3 days</option>
+          <option value="7">7 days</option>
           <option value="14">14 days</option>
           <option value="30" selected>30 days</option>
           <option value="60">60 days</option>
@@ -326,7 +329,7 @@
           <thead>
             <tr><th>Date</th><th>Score</th><th>Duration</th><th>Deep</th><th>REM</th><th>Avg Stress</th><th>1st Half</th><th>2nd Half</th><th>Recovery %</th><th>Below 20</th><th>Body Battery</th></tr>
           </thead>
-          <tbody id="sleep-body"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
+          <tbody id="sleep-body"><tr><td colspan="11" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -368,9 +371,9 @@
       <div class="chart-section">
         <table>
           <thead>
-            <tr><th>Date</th><th>Name</th><th>Type</th><th>Duration</th><th>Distance</th><th>Avg HR</th><th>Effort</th><th></th></tr>
+            <tr><th>Date</th><th>Name</th><th>Type</th><th>Duration</th><th>Distance / Sets</th><th>Avg HR</th><th>Effort</th><th></th></tr>
           </thead>
-          <tbody id="activities-body"><tr><td colspan="7" style="color:var(--muted)">Loading...</td></tr></tbody>
+          <tbody id="activities-body"><tr><td colspan="8" style="color:var(--muted)">Loading...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -428,6 +431,11 @@
   </main>
 
 <script>
+// Escape untrusted strings (activity names, filenames) before innerHTML
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 const chartInstances = {};
 Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 Chart.defaults.color = '#8b94a9';
@@ -493,7 +501,7 @@ async function loadToday() {
           <div class="day-label">${fmtDate(ds)}</div>
           ${items.map(a => `
             <div class="cardio-item">
-              <div class="act-name"><a href="/activity/${a.id}" style="color:var(--text);text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${a.name}</a></div>
+              <div class="act-name"><a href="/activity/${a.id}" style="color:var(--text);text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${esc(a.name)}</a></div>
               <div class="act-meta">
                 ${a.duration_min != null ? `${a.duration_min} min` : ''}
                 ${a.avg_hr != null ? ` &middot; ${Math.round(a.avg_hr)} bpm avg` : ''}
@@ -514,17 +522,17 @@ async function loadToday() {
               return `
                 <div class="set-row">
                   <select onchange="patchSet(${s.set_id}, {category: this.value})">${opts}</select>
-                  <input class="set-field" type="number" min="0" step="1"
+                  <input class="set-field" type="number" min="1" step="1"
                     value="${s.reps ?? ''}" placeholder="reps"
-                    onchange="patchSet(${s.set_id}, {reps: +this.value}, this)">
-                  <input class="set-field" type="number" min="0" step="0.5"
+                    onchange="patchSet(${s.set_id}, {reps: this.value}, this)">
+                  <input class="set-field" type="number" min="0.5" step="0.5"
                     value="${s.weight_lbs ?? ''}" placeholder="lbs"
-                    onchange="patchSet(${s.set_id}, {weight_lbs: +this.value}, this)">
+                    onchange="patchSet(${s.set_id}, {weight_lbs: this.value}, this)">
                 </div>`;
             }).join('');
             return `
               <div class="strength-activity">
-                <div class="act-name">${act.name}${act.duration_min != null ? ` <span style="color:var(--muted);font-weight:400;font-size:0.8rem">${act.duration_min} min</span>` : ''}</div>
+                <div class="act-name">${esc(act.name)}${act.duration_min != null ? ` <span style="color:var(--muted);font-weight:400;font-size:0.8rem">${act.duration_min} min</span>` : ''}</div>
                 ${setsHTML || '<div class="empty">No sets recorded</div>'}
               </div>`;
           }).join('')}
@@ -585,16 +593,37 @@ function groupByDate(items) {
 }
 
 async function patchSet(setId, fields, el) {
+  // A cleared input submits '' → 0; never save that (the server would also
+  // lock the session as manually edited)
+  for (const k of ['reps', 'weight_lbs']) {
+    if (k in fields) {
+      const n = parseFloat(fields[k]);
+      if (!Number.isFinite(n) || n <= 0) {
+        if (el) {
+          el.classList.add('save-error');
+          setTimeout(() => el.classList.remove('save-error'), 1200);
+        }
+        return;
+      }
+      fields[k] = n;
+    }
+  }
   if (el) el.classList.add('saving');
-  await fetch(`/api/strength/set/${setId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(fields),
-  });
+  let ok = false;
+  try {
+    const r = await fetch(`/api/strength/set/${setId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields),
+    });
+    ok = r.ok;
+  } catch (e) {
+    ok = false;
+  }
   if (el) {
     el.classList.remove('saving');
-    el.classList.add('saved');
-    setTimeout(() => el.classList.remove('saved'), 1200);
+    el.classList.add(ok ? 'saved' : 'save-error');
+    setTimeout(() => el.classList.remove('saved', 'save-error'), 1200);
   }
 }
 
@@ -717,6 +746,9 @@ function renderStressChart(trend) {
 
 function renderStressRecoveryChart(trend) {
   const workouts = trend.pre_sleep_workouts || [];
+  // Nights with first-half stress below this are greyed out: recovery % on an
+  // already-calm night is noise. Chart-only constant, unrelated to the
+  // configurable overnight_stress_low recovery threshold.
   const threshold = 12;
   const firstHalf = trend.stress_first_half_avg || trend.labels.map(() => null);
 
@@ -975,21 +1007,34 @@ async function loadActivities() {
   const data = await fetch(`/api/activities?days=${days}`).then(r => r.json());
   const tbody = document.getElementById('activities-body');
   if (!data.activities.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--muted)">No activities found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--muted)">No activities found.</td></tr>';
     return;
   }
-  tbody.innerHTML = data.activities.map(a => `
+  tbody.innerHTML = data.activities.map(a => {
+    // Only Strava activities have a detail page + external link; Garmin rows
+    // (strength/cardio recorded on the watch) show a plain name.
+    const nameCell = a.source === 'strava'
+      ? `<a href="/activity/${a.id}" style="color:var(--text);text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${esc(a.name) || '—'}</a>`
+      : esc(a.name) || '—';
+    const linkCell = a.source === 'strava'
+      ? `<a href="https://www.strava.com/activities/${a.id}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.8rem;text-decoration:none" title="View on Strava">↗</a>`
+      : '<span style="color:var(--muted);font-size:0.8rem" title="Recorded on Garmin">⌚</span>';
+    // Strength shows set count where cardio shows distance/effort.
+    const detail = a.is_strength
+      ? (a.set_count != null ? `${a.set_count} set${a.set_count === 1 ? '' : 's'}` : '—')
+      : (a.distance_km != null ? `${a.distance_km}km` : '—');
+    return `
     <tr>
       <td>${a.date}</td>
-      <td><a href="/activity/${a.id}" style="color:var(--text);text-decoration:none" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--text)'">${a.name || '—'}</a></td>
-      <td><span class="sport-pill">${a.sport_type || '—'}</span></td>
+      <td>${nameCell}</td>
+      <td><span class="sport-pill">${esc(fmtCat(a.sport_type || '—'))}</span></td>
       <td>${a.duration_min != null ? `${a.duration_min}min` : '—'}</td>
-      <td>${a.distance_km != null ? `${a.distance_km}km` : '—'}</td>
+      <td>${detail}</td>
       <td>${a.avg_hr != null ? `${a.avg_hr}bpm` : '—'}</td>
       <td>${a.suffer_score != null ? a.suffer_score : '—'}</td>
-      <td><a href="https://www.strava.com/activities/${a.id}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.8rem;text-decoration:none" title="View on Strava">↗</a></td>
-    </tr>
-  `).join('');
+      <td>${linkCell}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ── Weight ────────────────────────────────────────────────────────────────
@@ -1191,16 +1236,17 @@ async function loadDocuments() {
   list.innerHTML = data.documents.map(d => `
     <div class="doc-row">
       <div>
-        <div class="doc-name">${d.filename}</div>
+        <div class="doc-name">${esc(d.filename)}</div>
         <div class="doc-meta">${d.chunks} chunks · ${d.pages} page(s) · ${d.created_at ? d.created_at.slice(0,10) : ''}</div>
       </div>
-      <button class="doc-del" onclick="deleteDoc('${d.doc_id}', '${d.filename.replace(/'/g, "\\'")}')">Delete</button>
+      <button class="doc-del" onclick="deleteDoc('${d.doc_id}', '${esc(d.filename)}')">Delete</button>
     </div>`).join('');
 }
 
 async function deleteDoc(docId, name) {
   if (!confirm(`Delete "${name}" from the knowledge base?`)) return;
-  await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+  const r = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
+  if (!r.ok) alert(`Delete failed (${r.status}).`);
   loadDocuments();
 }
 
@@ -1233,7 +1279,10 @@ async function generateWorkout(type) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, instructions }),
     });
-    if (!r.ok) throw new Error(r.status);
+    if (!r.ok) {
+      const err = await r.json().catch(() => null);
+      throw new Error(err?.detail || `HTTP ${r.status}`);
+    }
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     while (true) {
@@ -1243,10 +1292,17 @@ async function generateWorkout(type) {
       result.innerHTML = coachMarkdown(_coachRaw) + '<span class="cursor">▍</span>';
       result.scrollTop = result.scrollHeight;
     }
+    _coachRaw += decoder.decode(); // flush a trailing multi-byte character
     result.innerHTML = coachMarkdown(_coachRaw);
-    if (_coachRaw.trim()) actions.style.display = 'block';
+    // Don't offer to save a mid-stream failure banner as a workout
+    const failed = _coachRaw.includes('⚠️ Generation failed');
+    if (_coachRaw.trim() && !failed) {
+      actions.style.display = 'block';
+      const saveBtn = document.querySelector('.coach-save');
+      if (saveBtn) saveBtn.disabled = false;
+    }
   } catch (e) {
-    result.innerHTML = `<span style="color:var(--poor)">Generation failed: ${e}</span>`;
+    result.innerHTML = `<span style="color:var(--poor)">Generation failed: ${esc(e.message || e)}</span>`;
   } finally {
     btns.forEach(b => b.disabled = false);
   }
@@ -1258,7 +1314,7 @@ async function saveWorkout() {
   btn.disabled = true;
   status.textContent = 'Saving…';
   try {
-    await fetch('/api/generate-workout/save', {
+    const r = await fetch('/api/generate-workout/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1267,9 +1323,13 @@ async function saveWorkout() {
         workout: _coachRaw,
       }),
     });
+    if (!r.ok) {
+      const err = await r.json().catch(() => null);
+      throw new Error(err?.detail || `HTTP ${r.status}`);
+    }
     status.textContent = 'Saved to memory ✓';
   } catch (e) {
-    status.textContent = `Save failed: ${e}`;
+    status.textContent = `Save failed: ${e.message || e}`;
     btn.disabled = false;
   }
 }

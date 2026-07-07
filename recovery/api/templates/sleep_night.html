@@ -144,9 +144,12 @@ async function load() {
   const av = n.averages_30d || {};
   document.title = `Sleep ${n.date} — Recovery Bot`;
 
-  const nightLabel = n.sleep_start && n.sleep_end
-    ? `${fmtDay(n.sleep_start)} → ${fmtDay(n.sleep_end)}`
-    : `Night ending ${n.date}`;
+  // Label the conventional night span (evening before → morning of), not the
+  // raw timestamps: a post-midnight bedtime would otherwise render as
+  // "Sun → Sun" for what the user thinks of as Saturday night. The meta line
+  // below still shows the exact clock times.
+  const endOfNight = new Date(n.date + 'T00:00:00');
+  const nightLabel = `${fmtDay(new Date(endOfNight.getTime() - 86400000))} → ${fmtDay(endOfNight)}`;
 
   const workoutsHTML = (n.pre_sleep_workouts || []).length
     ? `<div class="workout-chips">${n.pre_sleep_workouts.map(w => {

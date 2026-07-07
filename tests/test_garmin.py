@@ -1,7 +1,7 @@
 """Tests for Garmin ingest module (garminconnect API mocked)."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -116,17 +116,83 @@ def test_fetch_overnight_stress_returns_empty_on_error(mock_api):
 
 # ── fetch_body_battery ────────────────────────────────────────────────────
 
-def test_fetch_body_battery_parses_first_reading(mock_api):
+def test_fetch_body_battery_falls_back_to_daily_max(mock_api):
+    # No wake time → daily peak is the best proxy for the wake value
     mock_api.get_body_battery.return_value = [
-        {"bodyBatteryValuesArray": [[0, 85], [1, 80]]}
+        {"bodyBatteryValuesArray": [[0, 30], [1, 85], [2, 60]]}
     ]
     result = garmin.fetch_body_battery(mock_api, date(2024, 1, 1))
     assert result["body_battery_start"] == 85
 
 
+def test_fetch_body_battery_picks_reading_nearest_wake(mock_api):
+    # Series: mid-sleep low (14), wake peak (72), midday drain (40).
+    # With a wake time near the 72 reading, we must get 72 — not the low, and
+    # not a later/earlier value.
+    wake = 8_000_000
+    mock_api.get_body_battery.return_value = [
+        {"bodyBatteryValuesArray": [
+            [1_000_000, 14],       # mid-sleep low
+            [wake + 60_000, 72],   # ~1 min after wake — the peak
+            [20_000_000, 40],      # midday
+        ]}
+    ]
+    result = garmin.fetch_body_battery(mock_api, date(2024, 1, 1), wake_ms=wake)
+    assert result["body_battery_start"] == 72
+
+
+def test_fetch_body_battery_wake_far_from_readings_uses_max(mock_api):
+    # Wake time with no reading within ±90 min → fall back to daily max
+    mock_api.get_body_battery.return_value = [
+        {"bodyBatteryValuesArray": [[1_000_000, 30], [2_000_000, 88]]}
+    ]
+    result = garmin.fetch_body_battery(mock_api, date(2024, 1, 1), wake_ms=500_000_000)
+    assert result["body_battery_start"] == 88
+
+
 def test_fetch_body_battery_returns_empty_on_error(mock_api):
     mock_api.get_body_battery.side_effect = Exception("error")
     assert garmin.fetch_body_battery(mock_api, date(2024, 1, 1)) == {}
+
+
+# ── fetch_cardio_activities ───────────────────────────────────────────────
+
+def test_fetch_cardio_activities_parses_non_strength(mock_api):
+    mock_api.get_activities_by_date.return_value = [
+        {
+            "activityId": 555, "activityName": "Cardio",
+            "activityType": {"typeKey": "indoor_cardio"},
+            "startTimeLocal": "2026-07-01 16:53:54",
+            "duration": 3550.0, "distance": 0.0,
+            "averageHR": 129.0, "maxHR": 172.0, "calories": 492.0,
+        },
+    ]
+    result = garmin.fetch_cardio_activities(mock_api, date(2026, 7, 1))
+    assert len(result) == 1
+    a = result[0]
+    assert a["garmin_id"] == 555
+    assert a["sport_type"] == "indoor_cardio"
+    assert a["start_time"] == datetime(2026, 7, 1, 16, 53, 54)
+    assert a["duration_sec"] == 3550
+    assert a["avg_hr"] == 129.0
+    assert a["max_hr"] == 172
+    assert a["calories"] == 492
+    assert a["distance_m"] is None  # 0.0 → None
+
+
+def test_fetch_cardio_activities_excludes_strength(mock_api):
+    mock_api.get_activities_by_date.return_value = [
+        {"activityId": 1, "activityType": {"typeKey": "strength_training"}, "startTimeLocal": "2026-07-01 12:00:00"},
+        {"activityId": 2, "activityType": {"typeKey": "running"}, "startTimeLocal": "2026-07-01 07:00:00", "distance": 5000.0},
+    ]
+    result = garmin.fetch_cardio_activities(mock_api, date(2026, 7, 1))
+    assert [a["garmin_id"] for a in result] == [2]
+    assert result[0]["distance_m"] == 5000.0
+
+
+def test_fetch_cardio_activities_returns_empty_on_error(mock_api):
+    mock_api.get_activities_by_date.side_effect = Exception("boom")
+    assert garmin.fetch_cardio_activities(mock_api, date(2026, 7, 1)) == []
 
 
 # ── fetch_day ─────────────────────────────────────────────────────────────

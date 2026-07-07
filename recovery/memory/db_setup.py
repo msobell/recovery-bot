@@ -2,30 +2,21 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import event, text
-from sqlalchemy.engine import Engine
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-
-def load_sqlite_vec(engine: Engine) -> None:
-    """Register sqlite-vec on every new connection for this engine."""
-    @event.listens_for(engine, "connect")
-    def _connect(dbapi_conn, _):
-        try:
-            import sqlite_vec
-            dbapi_conn.enable_load_extension(True)
-            sqlite_vec.load(dbapi_conn)
-            dbapi_conn.enable_load_extension(False)
-        except ImportError:
-            logger.warning("sqlite-vec not installed — vector search disabled.")
-        except Exception as e:
-            logger.error(f"Failed to load sqlite-vec: {e}")
+# sqlite-vec is loaded per-connection by the engine's connect hook in
+# recovery.db.session.get_engine — the single copy of that logic.
 
 
 def ensure_virtual_tables(session: Session) -> None:
-    """Create FTS5 and vec0 virtual tables if they don't exist."""
+    """Create FTS5 and vec0 virtual tables if they don't exist.
+
+    NOTE: commits the session (DDL must persist even on read-only paths).
+    Call it before queuing any other pending changes.
+    """
     session.execute(text("""
         CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
             content,

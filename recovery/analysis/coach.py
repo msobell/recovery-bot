@@ -110,7 +110,8 @@ def stream_workout(session: Session, workout_type: str, instructions: str):
     system, user = build_prompt(session, workout_type, instructions)
 
     import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
+    # timeout guards a hung connection from stalling the request thread forever
+    client = anthropic.Anthropic(api_key=api_key, timeout=120.0)
     model = cfg_mod.get().coach.model
     with client.messages.stream(
         model=model,
@@ -120,3 +121,6 @@ def stream_workout(session: Session, workout_type: str, instructions: str):
     ) as stream:
         for text in stream.text_stream:
             yield text
+        final = stream.get_final_message()
+        if final.stop_reason == "max_tokens":
+            yield "\n\n_[Workout was cut off at the output limit — regenerate for a complete plan.]_"

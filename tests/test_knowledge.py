@@ -104,6 +104,25 @@ def test_ingest_search_delete_and_separation(isolated_dbs):
     assert list_documents() == []
 
 
+def test_delete_document_rejects_non_uuid(isolated_dbs):
+    """LIKE wildcards in the doc_id ('%', '_') used to match — and delete —
+    every chunk in the corpus."""
+    from recovery.knowledge.ingest import ingest_pdf, list_documents, delete_document
+
+    pdf = _make_pdf("Deload week: cut volume roughly in half and keep the bar speed crisp.")
+    summary = ingest_pdf("deload.pdf", pdf)
+    assert summary["chunks"] >= 1
+
+    assert delete_document("%") == 0
+    assert delete_document("_") == 0
+    assert delete_document("%25") == 0
+    assert delete_document("not-a-uuid") == 0
+    assert len(list_documents()) == 1  # corpus untouched
+
+    assert delete_document(summary["doc_id"]) == summary["chunks"]
+    assert list_documents() == []
+
+
 def test_ingest_rejects_empty_text_pdf(isolated_dbs, monkeypatch):
     # A PDF with no text layer and OCR disabled -> ValueError (clean 400 upstream).
     from recovery.knowledge.ingest import ingest_pdf
